@@ -8,6 +8,7 @@ import SimpleExpense from "./SimpleExpense";
 import SplitByDay from "./SplitByDay";
 import Balances from "./Balances";
 import UpgradeCard from "./UpgradeCard";
+import Logo from "../components/Logo";
 
 type View =
   | { name: "home" }
@@ -62,9 +63,7 @@ export default function TripView({
   return (
     <div>
       <div className="topbar">
-        <div className="logo">
-          Trip<span>Split</span>
-        </div>
+        <Logo />
         <div className="tripname grow">{session.trip.name}</div>
         <button className="btn ghost small" onClick={() => setView({ name: "share" })}>
           Share

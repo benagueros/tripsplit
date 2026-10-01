@@ -5,6 +5,7 @@ import type { Member, Trip } from "./lib/types";
 import CreateTrip from "./screens/CreateTrip";
 import JoinTrip from "./screens/JoinTrip";
 import TripView from "./screens/TripView";
+import Logo from "./components/Logo";
 
 export interface Session {
   trip: Trip;
@@ -94,9 +95,7 @@ export default function App() {
   return (
     <div>
       <div className="topbar">
-        <div className="logo">
-          Trip<span>Split</span>
-        </div>
+        <Logo />
       </div>
       <div className="screen">
         {error && <div className="err">{error}</div>}
