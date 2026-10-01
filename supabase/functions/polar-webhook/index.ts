@@ -73,9 +73,14 @@ async function verifySignature(
   timestamp: string,
   signatureHeader: string,
 ): Promise<boolean> {
-  // Reject stale deliveries (replay protection, 5-minute window).
+  // Timestamp sanity check. Polar retries failed deliveries with the ORIGINAL
+  // timestamp, and its backoff spans days — so a tight window breaks legitimate
+  // retries. The handler below is idempotent (absolute tier sets), so a
+  // replayed event is harmless; the HMAC signature is the authenticity
+  // guarantee, not the timestamp.
   const ts = Number(timestamp);
-  if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > 300) return false;
+  const now = Date.now() / 1000;
+  if (!Number.isFinite(ts) || ts > now + 300 || ts < now - 7 * 86400) return false;
 
   const message = `${id}.${timestamp}.${rawBody}`;
   const sigs = signatureHeader.split(" ").map((part) =>
