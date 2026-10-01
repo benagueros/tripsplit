@@ -81,11 +81,13 @@ Deno.serve(async (req) => {
         }, 400);
       }
 
-      // Generate a unique short code like CANYON-4821.
+      // Generate a unique short code like CANYON-482193. Six digits keeps it
+      // human-typable while making enumeration infeasible (~10.8M combos);
+      // join attempts are also rate-limited below.
       let code = "";
       for (let attempt = 0; attempt < 20; attempt++) {
         const word = WORDS[Math.floor(Math.random() * WORDS.length)];
-        const digits = String(Math.floor(1000 + Math.random() * 9000));
+        const digits = String(Math.floor(100000 + Math.random() * 900000));
         const candidate = `${word}-${digits}`;
         const { data } = await supabase.from("trips").select("id").eq("code", candidate).maybeSingle();
         if (!data) { code = candidate; break; }
@@ -111,8 +113,22 @@ Deno.serve(async (req) => {
       const { tokenOrCode } = body as { tokenOrCode: string };
       const value = (tokenOrCode ?? "").trim();
       if (!value) return json({ error: "Enter a trip link or code." }, 400);
-      // Short codes look like CANYON-4821; anything else is treated as a token.
-      const looksLikeCode = /^[A-Za-z]+-\d{4}$/.test(value);
+      // Rate-limit joins per IP: short codes are human-typable, so throttle
+      // enumeration attempts (30/min/IP makes the ~10.8M code space
+      // infeasible to sweep).
+      const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+      const minuteAgo = new Date(Date.now() - 60_000).toISOString();
+      await supabase.from("join_attempts").delete().lt("created_at", minuteAgo);
+      const { count } = await supabase.from("join_attempts")
+        .select("ip", { count: "exact", head: true })
+        .eq("ip", ip).gte("created_at", minuteAgo);
+      if ((count ?? 0) >= 30) {
+        return json({ error: "Too many attempts — wait a minute and try again." }, 429);
+      }
+      await supabase.from("join_attempts").insert({ ip });
+
+      // Short codes look like CANYON-482193; anything else is treated as a token.
+      const looksLikeCode = /^[A-Za-z]+-\d{6}$/.test(value);
       const attempts: Array<[string, string]> = looksLikeCode
         ? [["code", value.toUpperCase()], ["token", value]]
         : [["token", value], ["code", value.toUpperCase()]];
