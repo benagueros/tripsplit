@@ -21,9 +21,11 @@ type View =
 export default function TripView({
   session,
   onLeave,
+  onStartNewTrip,
 }: {
   session: Session;
   onLeave: () => void;
+  onStartNewTrip: () => void;
 }) {
   const [view, setView] = useState<View>({ name: "home" });
   const [showShareNudge, setShowShareNudge] = useState(true);
@@ -127,6 +129,7 @@ export default function TripView({
             data={data}
             onBack={() => setView({ name: "home" })}
             onChanged={reload}
+            onStartOwn={onStartNewTrip}
           />
         </div>
       )}

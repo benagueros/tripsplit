@@ -11,7 +11,7 @@ export default function ShareTrip({
 }) {
   const [copied, setCopied] = useState(false);
   const link = tripLink(trip.token);
-  const message = `Join "${trip.name}" on TripSplit: ${link} (backup code ${trip.code})`;
+  const message = `Join "${trip.name}" on TripSplit — split group costs with no app download, no signup: ${link} (backup code ${trip.code})`;
 
   const copy = async (text: string) => {
     try {

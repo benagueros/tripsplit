@@ -77,6 +77,12 @@ export default function App() {
     setLanding("choose");
   };
 
+  const handleStartNewTrip = () => {
+    forgetTrip();
+    setSession(null);
+    setLanding("create");
+  };
+
   if (booting) {
     return (
       <div className="screen center" style={{ paddingTop: 80 }}>
@@ -89,7 +95,7 @@ export default function App() {
   }
 
   if (session) {
-    return <TripView session={session} onLeave={handleLeave} />;
+    return <TripView session={session} onLeave={handleLeave} onStartNewTrip={handleStartNewTrip} />;
   }
 
   return (

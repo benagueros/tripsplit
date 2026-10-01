@@ -12,10 +12,12 @@ export default function Balances({
   data,
   onBack,
   onChanged,
+  onStartOwn,
 }: {
   data: TripData;
   onBack: () => void;
   onChanged: () => void;
+  onStartOwn: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -125,7 +127,7 @@ export default function Balances({
         <div className="ok">Everyone's settled up. 🎉</div>
       )}
       {remaining.map((s, i) => {
-        const note = `TripSplit: ${data.trip.name} — ${nameOf(s.from_member_id)} to ${nameOf(s.to_member_id)}`;
+        const note = `TripSplit: ${data.trip.name} — ${nameOf(s.from_member_id)} to ${nameOf(s.to_member_id)} via tripsplit.us`;
         return (
           <div className="card" key={i}>
             <div className="row between">
@@ -208,6 +210,17 @@ export default function Balances({
           </div>
         </div>
       ))}
+
+      <div className="card center" style={{ marginTop: 24 }}>
+        <div style={{ fontSize: 28 }}>🧳</div>
+        <b>Got another trip coming up?</b>
+        <div className="muted" style={{ margin: "6px 0 12px" }}>
+          Start your own TripSplit — free, no signup.
+        </div>
+        <button className="btn" onClick={onStartOwn}>
+          Start a trip
+        </button>
+      </div>
     </>
   );
 }

@@ -45,6 +45,10 @@ export default function JoinTrip({
       <button className="btn" disabled={joining} onClick={submit}>
         {joining ? "Joining…" : "Join trip"}
       </button>
+      <p className="muted" style={{ marginTop: 16 }}>
+        New to TripSplit? It splits group expenses with no app download and no
+        signup — the link is all you need.
+      </p>
       <button className="btn ghost" onClick={onBack}>Back</button>
     </>
   );
