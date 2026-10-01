@@ -31,7 +31,7 @@ export default function JoinTrip({
       <h1>Join a trip</h1>
       <p className="muted">
         Paste the link from the group chat, or type the short code (like{" "}
-        <b>CANYON-4821</b>).
+        <b>CANYON-482193</b>).
       </p>
       {error && <div className="err">{error}</div>}
       <input
