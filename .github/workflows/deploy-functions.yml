@@ -1,0 +1,46 @@
+# Auto-deploy Supabase edge functions on push to main.
+#
+# Triggers only when supabase/functions/** changes. Per-function JWT-verify
+# settings are explicit here and must stay in sync with the security model:
+#   - trip-auth, ocr-scan: gateway JWT verification ON (default)
+#   - polar-checkout, polar-cancel, polar-webhook: OFF (they do their own
+#     auth — in-code trip-JWT HMAC / webhook HMAC signature). The webhook
+#     would break if the gateway demanded a JWT, since Polar doesn't send one.
+#
+# Deploying does NOT touch function secrets (JWT_SECRET, POLAR_*, GEMINI_*) —
+# those are managed separately in the Supabase dashboard and are preserved.
+#
+# Required GitHub secrets (repo Settings > Secrets and variables > Actions):
+#   SUPABASE_ACCESS_TOKEN — personal access token from
+#     https://supabase.com/dashboard/account/tokens
+#   SUPABASE_PROJECT_REF  — e.g. ehpmedeltcxmftompijn
+
+name: Deploy Supabase edge functions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "supabase/functions/**"
+  workflow_dispatch: # manual run from the Actions tab (e.g. to test setup)
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Deploy edge functions
+        run: |
+          supabase functions deploy trip-auth --project-ref "$PROJECT_REF"
+          supabase functions deploy ocr-scan --project-ref "$PROJECT_REF"
+          supabase functions deploy polar-checkout --no-verify-jwt --project-ref "$PROJECT_REF"
+          supabase functions deploy polar-cancel --no-verify-jwt --project-ref "$PROJECT_REF"
+          supabase functions deploy polar-webhook --no-verify-jwt --project-ref "$PROJECT_REF"
