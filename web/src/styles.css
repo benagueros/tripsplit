@@ -127,3 +127,14 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; 
 .bigcode { font-size: 30px; font-weight: 800; letter-spacing: 3px; text-align: center; }
 .amt-big { font-size: 34px; font-weight: 800; font-variant-numeric: tabular-nums; }
 .center { text-align: center; }
+
+/* Loading spinner: emerald ring, CSS-only. */
+.spinner {
+  width: 44px; height: 44px; border-radius: 50%;
+  border: 4px solid rgba(18, 167, 112, 0.22);
+  border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+  margin: 6px auto 12px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }

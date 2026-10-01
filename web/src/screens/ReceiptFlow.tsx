@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { functionsUrl, getTripJwt } from "../lib/supabase";
 import { centsToDollars, dollarsToCents, formatMoney } from "../lib/money";
 import { saveReceiptExpense, updateReceiptExpense } from "../lib/store";
@@ -97,6 +97,7 @@ export default function ReceiptFlow({
   };
   const [step, setStep] = useState<"scan" | "correct" | "claim">(editing ? "correct" : "scan");
   const [scanning, setScanning] = useState(false);
+  const [scanSecs, setScanSecs] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [scansLeft, setScansLeft] = useState<number | null>(null);
   const [items, setItems] = useState<DraftItem[]>(
@@ -117,6 +118,15 @@ export default function ReceiptFlow({
   const [saving, setSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+
+  // Tick a seconds counter while a scan is in flight so the status copy can
+  // escalate honestly on slow reads instead of staring back silently.
+  useEffect(() => {
+    if (!scanning) return;
+    setScanSecs(0);
+    const t = window.setInterval(() => setScanSecs((s) => s + 1), 1000);
+    return () => window.clearInterval(t);
+  }, [scanning]);
 
   const scan = async (file: File) => {
     setError(null);
@@ -307,6 +317,17 @@ export default function ReceiptFlow({
               if (f) scan(f);
             }}
           />
+          {scanning ? (
+            <div className="card center" aria-live="polite">
+              <div className="spinner" role="status" aria-label="Reading receipt" />
+              <b>Reading your receipt…</b>
+              <div className="muted" style={{ marginTop: 6 }}>
+                {scanSecs < 12
+                  ? "This usually takes 10–20 seconds."
+                  : "Still working — the reader is being thorough. Hang tight."}
+              </div>
+            </div>
+          ) : (
           <div className="btnrow">
             <button
               className="btn"
@@ -317,7 +338,7 @@ export default function ReceiptFlow({
                 fileRef.current?.click();
               }}
             >
-              {scanning ? "Reading…" : "📷 Take photo"}
+              📷 Take photo
             </button>
             <button
               className="btn secondary"
@@ -331,6 +352,7 @@ export default function ReceiptFlow({
               🖼️ Upload photo
             </button>
           </div>
+          )}
           <button
             className="btn ghost"
             onClick={() => {
