@@ -1,7 +1,11 @@
 [build]
   base = "web"
   command = "npm run build"
-  publish = "web/dist"
+  publish = "dist"
 
 [build.environment]
   NODE_VERSION = "22"
+  # Supabase anon key + project URL are public client-side values by design
+  # (Supabase anon keys are publishable). Exempt them from secrets scanning
+  # so inlining them into the Vite bundle doesn't fail the build.
+  SECRETS_SCAN_OMIT_KEYS = "VITE_SUPABASE_URL,VITE_SUPABASE_ANON_KEY"
