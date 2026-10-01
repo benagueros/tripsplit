@@ -24,6 +24,49 @@ function json(body: unknown, status = 200) {
   });
 }
 
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+async function hmacSha256Base64(keyBytes: Uint8Array, message: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const mac = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message)),
+  );
+  return btoa(String.fromCharCode(...mac));
+}
+
+function candidateSecrets(secret: string): Uint8Array[] {
+  const out: Uint8Array[] = [];
+  const enc = new TextEncoder();
+  // 1. Verbatim (some Polar integrations use the full whsec_ string as the key).
+  out.push(enc.encode(secret));
+  const stripped = secret.startsWith("whsec_") ? secret.slice("whsec_".length) : secret;
+  if (stripped !== secret) {
+    // 2. Standard Webhooks spec: whsec_ + base64(raw key bytes).
+    try {
+      const bin = atob(stripped);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      out.push(bytes);
+    } catch {
+      // not valid base64 — skip
+    }
+    // 3. Stripped prefix, raw UTF-8 bytes.
+    out.push(enc.encode(stripped));
+  }
+  return out;
+}
+
 async function verifySignature(
   rawBody: string,
   id: string,
@@ -34,28 +77,16 @@ async function verifySignature(
   const ts = Number(timestamp);
   if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > 300) return false;
 
-  let secret = WEBHOOK_SECRET;
-  if (secret.startsWith("whsec_")) secret = secret.slice("whsec_".length);
+  const message = `${id}.${timestamp}.${rawBody}`;
+  const sigs = signatureHeader.split(" ").map((part) =>
+    part.startsWith("v1,") ? part.slice(3) : part
+  );
 
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const mac = new Uint8Array(
-    await crypto.subtle.sign(
-      "HMAC",
-      key,
-      new TextEncoder().encode(`${id}.${timestamp}.${rawBody}`),
-    ),
-  );
-  const expected = btoa(String.fromCharCode(...mac));
-  return signatureHeader.split(" ").some((part) => {
-    const sig = part.startsWith("v1,") ? part.slice(3) : part;
-    return sig === expected;
-  });
+  for (const keyBytes of candidateSecrets(WEBHOOK_SECRET)) {
+    const expected = await hmacSha256Base64(keyBytes, message);
+    if (sigs.some((sig) => timingSafeEqual(sig, expected))) return true;
+  }
+  return false;
 }
 
 Deno.serve(async (req) => {
