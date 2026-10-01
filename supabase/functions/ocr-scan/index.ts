@@ -200,6 +200,12 @@ Deno.serve(async (req) => {
       image_base64: string; mime_type: string;
     };
     if (!image_base64) return json({ error: "No image provided." }, 400);
+    // Server-side size cap: the client downscales, but anyone with the trip
+    // link can POST directly. Reject absurd payloads before they reach the
+    // vision API or burn quota. ~8MB decoded is far above a real receipt photo.
+    if (typeof image_base64 !== "string" || Math.floor(image_base64.length * 3 / 4) > 8 * 1024 * 1024) {
+      return json({ error: "Image is too large — please use a smaller photo." }, 413);
+    }
     if (!GEMINI_KEY) return json({ error: "Receipt scanning is not configured." }, 500);
 
     let parsed: Record<string, unknown> | undefined;
@@ -230,12 +236,13 @@ Deno.serve(async (req) => {
       }
     }
     if (!parsed) {
+      // Log the upstream detail server-side only — don't forward raw provider
+      // text to clients.
+      if (visionDetail) console.error("ocr-scan: vision failed:", visionDetail.slice(0, 500));
       return json({
         error: visionDown
           ? "The scanner service is having trouble right now — try again in a bit, or enter the items manually."
           : "Couldn't read that receipt. Try a flatter, well-lit photo — or enter the items manually.",
-        // Sanitized upstream detail for debugging (never contains the key).
-        ...(visionDetail ? { detail: visionDetail } : {}),
       }, 502);
     }
 

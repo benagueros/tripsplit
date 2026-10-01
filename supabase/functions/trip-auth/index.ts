@@ -113,10 +113,14 @@ Deno.serve(async (req) => {
       const { tokenOrCode } = body as { tokenOrCode: string };
       const value = (tokenOrCode ?? "").trim();
       if (!value) return json({ error: "Enter a trip link or code." }, 400);
+
       // Rate-limit joins per IP: short codes are human-typable, so throttle
       // enumeration attempts (30/min/IP makes the ~10.8M code space
-      // infeasible to sweep).
-      const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+      // infeasible to sweep). The platform gateway appends the real client
+      // IP to the RIGHT of X-Forwarded-For; the leftmost entries are
+      // attacker-controlled, so take the last one.
+      const fwd = req.headers.get("x-forwarded-for");
+      const ip = fwd?.split(",").map((s) => s.trim()).filter(Boolean).pop() ?? "unknown";
       const minuteAgo = new Date(Date.now() - 60_000).toISOString();
       await supabase.from("join_attempts").delete().lt("created_at", minuteAgo);
       const { count } = await supabase.from("join_attempts")

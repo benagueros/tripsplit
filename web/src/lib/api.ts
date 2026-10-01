@@ -1,19 +1,13 @@
-import { anonKey, functionsUrl, setTripJwt } from "./supabase";
+import { anonKey, functionsUrl } from "./supabase";
+import { forgetSession, getActiveToken, saveSession } from "./session";
 import type { Member, Trip } from "./types";
 
-const TOKEN_KEY = "tripsplit.trip_token";
-
 export function getSavedTripToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
-}
-
-export function saveTripToken(token: string) {
-  localStorage.setItem(TOKEN_KEY, token);
+  return getActiveToken();
 }
 
 export function forgetTrip() {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem("tripsplit.jwt");
+  forgetSession();
 }
 
 async function fn<T>(name: string, body: unknown, jwt?: string): Promise<T> {
@@ -51,8 +45,7 @@ export async function createTrip(
     jwt: string;
     token: string;
   }>("trip-auth", { action: "create", name, memberNames });
-  saveTripToken(data.token);
-  setTripJwt(data.jwt);
+  saveSession(data.token, data.jwt);
   return { trip: data.trip, members: data.members, jwt: data.jwt };
 }
 
@@ -66,8 +59,7 @@ export async function joinTrip(
     jwt: string;
     token: string;
   }>("trip-auth", { action: "join", tokenOrCode });
-  saveTripToken(data.token);
-  setTripJwt(data.jwt);
+  saveSession(data.token, data.jwt);
   return { trip: data.trip, members: data.members, jwt: data.jwt };
 }
 

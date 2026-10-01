@@ -103,8 +103,14 @@ export function computeShares(args: {
     // Tax + tip = whatever is left of the receipt total, split by claimed weight.
     const taxTip = e.amount_cents - itemsSubtotal;
     if (taxTip > 0) {
-      const ids = [...memberSubtotals.keys()];
-      const weights = ids.map((id) => memberSubtotals.get(id) ?? 0);
+      let ids = [...memberSubtotals.keys()];
+      let weights = ids.map((id) => memberSubtotals.get(id) ?? 0);
+      if (ids.length === 0) {
+        // Degenerate receipt (nothing claimed): spread across all members
+        // instead of throwing and blanking the screen.
+        ids = members.map((m) => m.id);
+        weights = ids.map(() => 1);
+      }
       const shares = splitCentsByWeight(taxTip, weights);
       ids.forEach((id, k) =>
         memberSubtotals.set(id, (memberSubtotals.get(id) ?? 0) + shares[k])

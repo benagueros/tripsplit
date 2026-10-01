@@ -144,6 +144,29 @@ Deno.serve(async (req) => {
   }
 
   const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
+
+  // Ignore stale downgrades: if the trip already points at a different (newer)
+  // subscription — e.g. cancel then resubscribe — a late event for the old
+  // subscription must not flip a paying trip back to free.
+  if (tier === "free") {
+    const { data: trip, error: tripErr } = await supabase
+      .from("trips")
+      .select("polar_subscription_id")
+      .eq("id", tripId)
+      .single();
+    if (tripErr) {
+      console.error("polar-webhook: trip lookup failed", tripErr.message);
+      return json({ error: "trip lookup failed" }, 500);
+    }
+    const current = (trip?.polar_subscription_id as string | null) ?? null;
+    if (current && current !== subscriptionId) {
+      console.log(
+        `polar-webhook: ignoring stale ${type} for trip ${tripId} (event sub ${subscriptionId || "?"}, current ${current})`
+      );
+      return json({ ok: true, ignored: "stale subscription" });
+    }
+  }
+
   const { error } = await supabase
     .from("trips")
     .update({

@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { getSessionJwt } from "./session";
 
 const url = import.meta.env.VITE_SUPABASE_URL as string;
 export const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
@@ -14,18 +15,8 @@ export function functionsUrl(name: string): string {
 }
 
 /** Scoped JWT minted by the trip-auth edge function; stored per trip token. */
-const JWT_KEY = "tripsplit.jwt";
-
 export function getTripJwt(): string | null {
-  return localStorage.getItem(JWT_KEY);
-}
-
-export function setTripJwt(jwt: string) {
-  localStorage.setItem(JWT_KEY, jwt);
-}
-
-export function clearTripJwt() {
-  localStorage.removeItem(JWT_KEY);
+  return getSessionJwt();
 }
 
 /** Authenticated supabase client carrying the trip-scoped JWT. */

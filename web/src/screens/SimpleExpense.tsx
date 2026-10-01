@@ -51,7 +51,13 @@ export default function SimpleExpense({
       return shares;
     }
     // percent
-    const pcts = people.map((m) => parseFloat(percent[m.id] || "0"));
+    const pcts = people.map((m) => {
+      const p = parseFloat(percent[m.id] || "0");
+      if (!Number.isFinite(p)) {
+        throw new Error("Percents must be numbers that total 100%.");
+      }
+      return p;
+    });
     const sumPct = pcts.reduce((a, p) => a + p, 0);
     if (Math.abs(sumPct - 100) > 0.001) {
       throw new Error(`Percents add to ${sumPct}% — they must total 100%.`);

@@ -26,7 +26,7 @@ export default function TripView({
   onLeave: () => void;
 }) {
   const [view, setView] = useState<View>({ name: "home" });
-  const [showShareNudge] = useState(true);
+  const [showShareNudge, setShowShareNudge] = useState(true);
   const [editData, setEditData] = useState<EditReceiptData | null>(null);
   const [editLoading, setEditLoading] = useState(false);
   const [justUpgraded, setJustUpgraded] = useState(false);
@@ -146,9 +146,18 @@ export default function TripView({
                   <b>Trip's live!</b>
                   <div className="muted">Drop the link in the group chat.</div>
                 </div>
-                <button className="btn small" onClick={() => setView({ name: "share" })}>
-                  Share
-                </button>
+                <div className="row">
+                  <button className="btn small" onClick={() => setView({ name: "share" })}>
+                    Share
+                  </button>
+                  <button
+                    className="btn small secondary"
+                    aria-label="Dismiss"
+                    onClick={() => setShowShareNudge(false)}
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
             </div>
           )}
