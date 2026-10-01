@@ -6,6 +6,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const JWT_SECRET = Deno.env.get("JWT_SECRET")!;
 const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY")!;
 // Google's own error messages name the current model when an old one is
 // rejected, so the first default was set from a live API response
@@ -31,14 +32,39 @@ function json(body: unknown, status = 200) {
 }
 
 function base64urlDecode(s: string): string {
-  const b64 = s.replaceAll("-", "+").replaceAll("_", "/");
+  let b64 = s.replaceAll("-", "+").replaceAll("_", "/");
+  while (b64.length % 4) b64 += "=";
   return atob(b64);
 }
 
-function tripIdFromJwt(auth: string | null): string | null {
+// Verify the trip JWT's HMAC-SHA256 signature (signed by trip-auth with
+// JWT_SECRET) and return the trip_id. The Supabase gateway's JWT check can't
+// cover this — it validates against the project's auth secret, not ours — so
+// the signature must be checked here, otherwise anyone could forge a token
+// for any trip_id.
+async function verifyTripJwt(auth: string | null): Promise<string | null> {
   if (!auth?.startsWith("Bearer ")) return null;
+  const parts = auth.slice(7).split(".");
+  if (parts.length !== 3) return null;
+  const [headerB64, payloadB64, sigB64] = parts;
   try {
-    const payload = JSON.parse(base64urlDecode(auth.slice(7).split(".")[1]));
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(JWT_SECRET),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"],
+    );
+    const sigBytes = Uint8Array.from(base64urlDecode(sigB64), (c) => c.charCodeAt(0));
+    const ok = await crypto.subtle.verify(
+      "HMAC",
+      key,
+      sigBytes,
+      new TextEncoder().encode(`${headerB64}.${payloadB64}`),
+    );
+    if (!ok) return null;
+    const payload = JSON.parse(base64urlDecode(payloadB64));
+    if (payload.exp && payload.exp < Date.now() / 1000) return null;
     return payload.trip_id ?? null;
   } catch {
     return null;
@@ -149,7 +175,7 @@ Deno.serve(async (req) => {
   const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
 
   try {
-    const tripId = tripIdFromJwt(req.headers.get("authorization"));
+    const tripId = await verifyTripJwt(req.headers.get("authorization"));
     if (!tripId) return json({ error: "Not authorized for this trip." }, 401);
 
     const { data: trip } = await supabase.from("trips").select("id,tier").eq("id", tripId).single();
