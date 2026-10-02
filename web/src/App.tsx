@@ -107,10 +107,10 @@ export default function App() {
         {error && <div className="err">{error}</div>}
         {landing === "choose" && (
           <>
-            <h1>Split the trip, not the friendship.</h1>
+            <h1>Snap. Claim. Settled.</h1>
             <p className="muted">
-              Scan receipts, claim what you had, and settle up with Venmo. No
-              accounts — share one link in the group chat and you're done.
+              Share one link in the group chat and you're done. Split the
+              bill, not the friendship.
             </p>
             <button className="btn" onClick={() => setLanding("create")}>
               Start a trip
