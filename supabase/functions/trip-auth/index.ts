@@ -57,6 +57,28 @@ function json(body: unknown, status = 200) {
   });
 }
 
+// Per-IP rate limiting backed by the join_attempts table. Short trip codes
+// are human-typable, so enumeration is throttled; trip creation is throttled
+// too so one IP can't spam the trips table. The platform gateway appends the
+// real client IP to the RIGHT of X-Forwarded-For; the leftmost entries are
+// attacker-controlled, so take the last one.
+async function checkRateLimit(
+  supabase: ReturnType<typeof createClient>,
+  req: Request,
+  limit: number,
+): Promise<boolean> {
+  const fwd = req.headers.get("x-forwarded-for");
+  const ip = fwd?.split(",").map((s) => s.trim()).filter(Boolean).pop() ?? "unknown";
+  const minuteAgo = new Date(Date.now() - 60_000).toISOString();
+  await supabase.from("join_attempts").delete().lt("created_at", minuteAgo);
+  const { count } = await supabase.from("join_attempts")
+    .select("ip", { count: "exact", head: true })
+    .eq("ip", ip).gte("created_at", minuteAgo);
+  if ((count ?? 0) >= limit) return false;
+  await supabase.from("join_attempts").insert({ ip });
+  return true;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
@@ -66,6 +88,9 @@ Deno.serve(async (req) => {
     const { action } = body as { action: string };
 
     if (action === "create") {
+      if (!(await checkRateLimit(supabase, req, 10))) {
+        return json({ error: "Too many attempts — wait a minute and try again." }, 429);
+      }
       const { name, memberNames } = body as {
         name: string; memberNames: string[];
       };
@@ -116,20 +141,10 @@ Deno.serve(async (req) => {
 
       // Rate-limit joins per IP: short codes are human-typable, so throttle
       // enumeration attempts (30/min/IP makes the ~10.8M code space
-      // infeasible to sweep). The platform gateway appends the real client
-      // IP to the RIGHT of X-Forwarded-For; the leftmost entries are
-      // attacker-controlled, so take the last one.
-      const fwd = req.headers.get("x-forwarded-for");
-      const ip = fwd?.split(",").map((s) => s.trim()).filter(Boolean).pop() ?? "unknown";
-      const minuteAgo = new Date(Date.now() - 60_000).toISOString();
-      await supabase.from("join_attempts").delete().lt("created_at", minuteAgo);
-      const { count } = await supabase.from("join_attempts")
-        .select("ip", { count: "exact", head: true })
-        .eq("ip", ip).gte("created_at", minuteAgo);
-      if ((count ?? 0) >= 30) {
+      // infeasible to sweep).
+      if (!(await checkRateLimit(supabase, req, 30))) {
         return json({ error: "Too many attempts — wait a minute and try again." }, 429);
       }
-      await supabase.from("join_attempts").insert({ ip });
 
       // Short codes look like CANYON-482193; anything else is treated as a token.
       const looksLikeCode = /^[A-Za-z]+-\d{6}$/.test(value);

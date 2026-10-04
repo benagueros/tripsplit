@@ -146,7 +146,7 @@ export async function saveReceiptExpense(args: {
   name: string;
   totalCents: number;
   paidBy: string;
-  items: { name: string; qty: number; price_cents: number }[];
+  items: { tempId: string; name: string; qty: number; price_cents: number }[];
   claims: Map<string, { member_id: string; qty: number }[]>; // keyed by client-side temp id
 }): Promise<string> {
   const db = authedClient();
@@ -164,12 +164,18 @@ export async function saveReceiptExpense(args: {
   ).select();
   if (itemErr) throw itemErr;
 
-  // Map client temp ids -> real ids by sort order, then insert claims.
+  // Map client temp ids -> real ids via the sort index assigned at insert.
+  // Claims are looked up by each item's OWN tempId — never by position —
+  // so deleting or re-adding items can't misattach or drop claims.
+  const realIdBySort = new Map(
+    ((items ?? []) as { id: string; sort: number }[]).map((r) => [r.sort, r.id])
+  );
   const rows: { receipt_item_id: string; member_id: string; qty: number }[] = [];
-  (items ?? []).forEach((real: { id: string; sort: number }) => {
-    const tempKey = `tmp-${real.sort}`;
-    for (const c of args.claims.get(tempKey) ?? []) {
-      rows.push({ receipt_item_id: real.id, member_id: c.member_id, qty: c.qty });
+  args.items.forEach((it, i) => {
+    const realId = realIdBySort.get(i);
+    if (!realId) return;
+    for (const c of args.claims.get(it.tempId) ?? []) {
+      rows.push({ receipt_item_id: realId, member_id: c.member_id, qty: c.qty });
     }
   });
   if (rows.length > 0) {
@@ -236,7 +242,7 @@ export async function updateReceiptExpense(args: {
   name: string;
   totalCents: number;
   paidBy: string;
-  items: { name: string; qty: number; price_cents: number }[];
+  items: { tempId: string; name: string; qty: number; price_cents: number }[];
   claims: Map<string, { member_id: string; qty: number }[]>; // keyed by client-side temp id
 }): Promise<void> {
   const db = authedClient();
@@ -258,10 +264,14 @@ export async function updateReceiptExpense(args: {
   if (itemErr) throw itemErr;
 
   const rows: { receipt_item_id: string; member_id: string; qty: number }[] = [];
-  (items ?? []).forEach((real: { id: string; sort: number }) => {
-    const tempKey = `tmp-${real.sort}`;
-    for (const c of args.claims.get(tempKey) ?? []) {
-      rows.push({ receipt_item_id: real.id, member_id: c.member_id, qty: c.qty });
+  const realIdBySort = new Map(
+    ((items ?? []) as { id: string; sort: number }[]).map((r) => [r.sort, r.id])
+  );
+  args.items.forEach((it, i) => {
+    const realId = realIdBySort.get(i);
+    if (!realId) return;
+    for (const c of args.claims.get(it.tempId) ?? []) {
+      rows.push({ receipt_item_id: realId, member_id: c.member_id, qty: c.qty });
     }
   });
   if (rows.length > 0) {

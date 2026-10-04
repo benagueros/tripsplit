@@ -271,7 +271,7 @@ export default function ReceiptFlow({
         name: name.trim(),
         totalCents,
         paidBy,
-        items: parsedItems.map(({ name, qty, price_cents }) => ({ name, qty, price_cents })),
+        items: parsedItems.map(({ tempId, name, qty, price_cents }) => ({ tempId, name, qty, price_cents })),
         claims,
       };
       if (editing && editData) {

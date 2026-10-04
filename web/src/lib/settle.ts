@@ -67,7 +67,16 @@ export function computeShares(args: {
       if (unitCount === 0) continue;
       const perUnit = splitCentsEvenly(e.amount_cents, unitCount);
       units.forEach((u, i) => {
-        if (u.member_ids.length === 0) return; // blocked at save time; guard anyway
+        if (u.member_ids.length === 0) {
+          // Blocked at save time; guard anyway. Don't let the cents vanish
+          // (consumed would no longer reconcile with paid) — spread this
+          // unit's share across all members like unclaimed receipt amounts.
+          if (members.length > 0) {
+            const shares = splitCentsEvenly(perUnit[i], members.length);
+            members.forEach((m, k) => addConsumed(m.id, shares[k]));
+          }
+          return;
+        }
         const shares = splitCentsEvenly(perUnit[i], u.member_ids.length);
         u.member_ids.forEach((mid, k) => addConsumed(mid, shares[k]));
       });
@@ -101,8 +110,11 @@ export function computeShares(args: {
       );
     }
     // Tax + tip = whatever is left of the receipt total, split by claimed weight.
+    // A negative remainder (e.g. a store-level discount) is a discount, not
+    // an error: distribute it proportionally too, so consumed still sums to
+    // the receipt total instead of silently ignoring it.
     const taxTip = e.amount_cents - itemsSubtotal;
-    if (taxTip > 0) {
+    if (taxTip !== 0) {
       let ids = [...memberSubtotals.keys()];
       let weights = ids.map((id) => memberSubtotals.get(id) ?? 0);
       if (ids.length === 0) {

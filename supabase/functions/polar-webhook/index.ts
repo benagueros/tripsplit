@@ -145,19 +145,38 @@ Deno.serve(async (req) => {
 
   const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
 
+  // Event ordering: Polar may deliver events late or out of order (retries
+  // reuse the original timestamp). A delayed event must never overwrite
+  // newer state — e.g. a stale "paid" event for an OLD subscription
+  // overwriting polar_subscription_id, after which the old sub's "canceled"
+  // event would downgrade a trip that's actually paying on a new sub.
+  // Track the newest applied event timestamp per trip and ignore anything
+  // strictly older. (Same-second events apply in arrival order; tier sets
+  // are idempotent so a retried duplicate is harmless.)
+  const eventTs = Number(timestamp); // validated finite by verifySignature
+  const { data: trip, error: tripErr } = await supabase
+    .from("trips")
+    .select("polar_subscription_id, polar_last_event_ts")
+    .eq("id", tripId)
+    .single();
+  if (tripErr) {
+    console.error("polar-webhook: trip lookup failed", tripErr.message);
+    return json({ error: "trip lookup failed" }, 500);
+  }
+  const lastTs = trip?.polar_last_event_ts
+    ? new Date(trip.polar_last_event_ts as string).getTime() / 1000
+    : null;
+  if (lastTs !== null && eventTs < lastTs) {
+    console.log(
+      `polar-webhook: ignoring out-of-order ${type} for trip ${tripId} (event ts ${eventTs}, last applied ${lastTs})`
+    );
+    return json({ ok: true, ignored: "out-of-order event" });
+  }
+
   // Ignore stale downgrades: if the trip already points at a different (newer)
   // subscription — e.g. cancel then resubscribe — a late event for the old
   // subscription must not flip a paying trip back to free.
   if (tier === "free") {
-    const { data: trip, error: tripErr } = await supabase
-      .from("trips")
-      .select("polar_subscription_id")
-      .eq("id", tripId)
-      .single();
-    if (tripErr) {
-      console.error("polar-webhook: trip lookup failed", tripErr.message);
-      return json({ error: "trip lookup failed" }, 500);
-    }
     const current = (trip?.polar_subscription_id as string | null) ?? null;
     if (current && current !== subscriptionId) {
       console.log(
@@ -173,6 +192,7 @@ Deno.serve(async (req) => {
       tier,
       polar_subscription_id: subscriptionId || null,
       polar_customer_id: customerId || null,
+      polar_last_event_ts: new Date(eventTs * 1000).toISOString(),
     })
     .eq("id", tripId);
 

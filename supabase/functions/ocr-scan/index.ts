@@ -94,7 +94,9 @@ async function visionCall(
   image: { mime_type: string; data: string },
   retryHint: string | null
 ): Promise<Record<string, unknown>> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
+  // The API key travels in the x-goog-api-key header, never in the URL —
+  // query strings end up in access logs, whereas headers don't.
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
   const body = JSON.stringify({
     system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
     contents: [{
@@ -111,7 +113,10 @@ async function visionCall(
   for (let attempt = 0; attempt < 3; attempt++) {
     res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": GEMINI_KEY,
+      },
       body,
     });
     if (res.ok) break;
@@ -124,7 +129,8 @@ async function visionCall(
   if (!res.ok) {
     console.error("vision error", model, errText);
     // Surface a sanitized hint so failures are diagnosable without the
-    // dashboard logs. Never includes the key (it's only in the URL query).
+    // dashboard logs. Never includes the key (it travels in a header, and
+    // only a redacted slice of the provider's message is forwarded).
     let hint = "unknown";
     try {
       const ej = JSON.parse(errText);
@@ -182,19 +188,14 @@ Deno.serve(async (req) => {
     if (!trip) return json({ error: "Trip not found." }, 404);
 
     // Monthly quota, counted server-side so it can't be bypassed.
+    // Reserve-first: the usage row is inserted BEFORE the vision call and
+    // the count happens after. A plain check-then-act lets two concurrent
+    // scans both slip under the quota; the insert is the atomic reservation.
+    // Over-quota and failed scans roll their row back, so quota is never
+    // burned on failures (fail-closed: at worst a boundary race retries).
     const monthStart = new Date();
     monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
-    const { count } = await supabase.from("scan_usage")
-      .select("id", { count: "exact", head: true })
-      .eq("trip_id", tripId)
-      .gte("created_at", monthStart.toISOString());
     const quota = QUOTAS[trip.tier] ?? QUOTAS.free;
-    if ((count ?? 0) >= quota) {
-      return json({
-        error: `This trip has used its ${quota} scans for the month.`,
-        quota_exceeded: true,
-      }, 429);
-    }
 
     const { image_base64, mime_type } = await req.json() as {
       image_base64: string; mime_type: string;
@@ -207,6 +208,27 @@ Deno.serve(async (req) => {
       return json({ error: "Image is too large — please use a smaller photo." }, 413);
     }
     if (!GEMINI_KEY) return json({ error: "Receipt scanning is not configured." }, 500);
+
+    const { data: usageRow, error: usageErr } = await supabase
+      .from("scan_usage").insert({ trip_id: tripId }).select("id").single();
+    if (usageErr || !usageRow) {
+      console.error("ocr-scan: usage reservation failed", usageErr?.message);
+      return json({ error: "Something went wrong — try again." }, 500);
+    }
+    const releaseReservation = () =>
+      supabase.from("scan_usage").delete().eq("id", usageRow.id);
+
+    const { count } = await supabase.from("scan_usage")
+      .select("id", { count: "exact", head: true })
+      .eq("trip_id", tripId)
+      .gte("created_at", monthStart.toISOString());
+    if ((count ?? 0) > quota) {
+      await releaseReservation();
+      return json({
+        error: `This trip has used its ${quota} scans for the month.`,
+        quota_exceeded: true,
+      }, 429);
+    }
 
     let parsed: Record<string, unknown> | undefined;
     let visionDown = false;
@@ -236,6 +258,8 @@ Deno.serve(async (req) => {
       }
     }
     if (!parsed) {
+      // Roll back the reservation: a failed scan must not burn quota.
+      await releaseReservation();
       // Log the upstream detail server-side only — don't forward raw provider
       // text to clients.
       if (visionDetail) console.error("ocr-scan: vision failed:", visionDetail.slice(0, 500));
@@ -255,10 +279,9 @@ Deno.serve(async (req) => {
         sort: i,
       }));
     if (items.length === 0) {
+      await releaseReservation();
       return json({ error: "No items found — try a clearer photo." }, 422);
     }
-
-    await supabase.from("scan_usage").insert({ trip_id: tripId });
 
     return json({
       items,
@@ -266,7 +289,7 @@ Deno.serve(async (req) => {
       tax_cents: parsed.tax_cents ?? null,
       tip_cents: parsed.tip_cents ?? null,
       total_cents: parsed.total_cents ?? null,
-      scans_remaining: quota - (count ?? 0) - 1,
+      scans_remaining: quota - (count ?? 0),
     });
   } catch (e) {
     console.error(e);
