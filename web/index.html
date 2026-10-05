@@ -8,8 +8,9 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta
       name="description"
-      content="TripSplit — split trip expenses with your group. No accounts, just share the link."
+      content="TripSplit splits group trip expenses with no accounts or app download. Share one link, scan receipts with AI, claim your items, and settle up via Venmo — a free Splitwise alternative for road trips, vacations, and group travel."
     />
+    <link rel="canonical" href="https://tripsplit.us/" />
     <!-- Link previews (Open Graph / Twitter Card). Static: trip links carry the
          token in the URL fragment, which never reaches the server, so every
          link unfurls this same card. -->
@@ -32,10 +33,48 @@
       content="Share one link in the group chat and you're done. Split the bill, not the friendship."
     />
     <meta name="twitter:image" content="https://tripsplit.us/og-image.png" />
-    <title>TripSplit</title>
+    <title>TripSplit — Split Trip Expenses Without Accounts | Snap. Claim. Settled.</title>
+    <!-- Structured data: helps search engines classify the app. -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "TripSplit",
+      "slogan": "Snap. Claim. Settled.",
+      "applicationCategory": "FinanceApplication",
+      "operatingSystem": "Web",
+      "url": "https://tripsplit.us/",
+      "description": "Split group trip expenses with no accounts or app download. Share one link, scan receipts with AI, claim your items, and settle up via Venmo.",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD",
+        "description": "Free up to 15 receipt scans per month; TripSplit Plus ($2.99/mo) raises the limit to 200."
+      }
+    }
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Static pre-rendered landing content for crawlers and no-JS clients.
+         React (createRoot) replaces everything inside #root on boot, so
+         human visitors never see this — but search engines get real,
+         keyword-rich content on first paint instead of an empty div. -->
+    <div id="root">
+      <div style="background:#14161a;color:#ffffff;min-height:100vh;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;">
+        <div style="max-width:640px;margin:0 auto;padding:72px 24px;text-align:center;">
+          <div style="font-size:40px;font-weight:800;letter-spacing:-1px;margin-bottom:8px;"><span style="color:#ffffff;">trip</span><span style="color:#12a770;">split</span></div>
+          <h1 style="font-size:34px;font-weight:800;margin:24px 0 12px;letter-spacing:-0.5px;">Snap. Claim. Settled.</h1>
+          <p style="color:#9aa0a6;font-size:17px;line-height:1.55;margin:0 0 20px;">Share one link in the group chat and you're done. Split the bill, not the friendship.</p>
+          <p style="color:#c8dfc3;font-size:15px;line-height:1.65;margin:0 0 20px;">TripSplit is a free Splitwise alternative for splitting group trip expenses. Scan receipts with AI, claim the items you had, and settle up with Venmo — with no app download, no accounts, and no signup. Everyone joins from one link in their browser. Built for road trips, vacations, bachelor and bachelorette parties, and group travel.</p>
+          <ul style="list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:8px;justify-content:center;">
+            <li style="background:#23262b;border-radius:999px;padding:8px 16px;font-size:13px;color:#c8dfc3;">AI receipt scanning</li>
+            <li style="background:#23262b;border-radius:999px;padding:8px 16px;font-size:13px;color:#c8dfc3;">Itemized claiming</li>
+            <li style="background:#23262b;border-radius:999px;padding:8px 16px;font-size:13px;color:#c8dfc3;">Automatic tax &amp; tip splitting</li>
+            <li style="background:#23262b;border-radius:999px;padding:8px 16px;font-size:13px;color:#c8dfc3;">Settle up with Venmo</li>
+          </ul>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
