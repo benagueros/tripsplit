@@ -73,10 +73,12 @@ async function verifyTripJwt(auth: string | null): Promise<string | null> {
 
 const SYSTEM_PROMPT = `You are a receipt parser. Extract every purchased line item from this receipt photo.
 Return ONLY valid JSON with this shape:
-{"items":[{"name":string,"qty":number,"price_cents":integer}],
+{"merchant_name":string|null,"items":[{"name":string,"qty":number,"price_cents":integer}],
  "subtotal_cents":integer|null,"tax_cents":integer|null,"tip_cents":integer|null,"total_cents":integer|null}
 Rules:
+- merchant_name is the store/restaurant name printed at the top of the receipt; null if none is identifiable.
 - price_cents is the TOTAL line price in cents (qty × unit price), not the unit price.
+- Discounts, coupons, and price adjustments (lines like "-$2.00", "DISCOUNT", "promo savings") are their own line items with qty 1 and NEGATIVE price_cents. Never report a discount as $0.
 - qty is the quantity shown; default 1.
 - Extract ALL line items — warehouse receipts (e.g. Costco) can have dozens; do not stop early and do not summarize.
 - Warehouse receipts show an item number next to each product: use the product description as the name, ignore the item number.
@@ -286,7 +288,9 @@ Deno.serve(async (req) => {
       .map((it: { name: string; qty?: number; price_cents?: number }, i: number) => ({
         name: String(it.name).slice(0, 120),
         qty: Math.max(1, Math.round(Number(it.qty) || 1)),
-        price_cents: Math.max(0, Math.round(Number(it.price_cents) || 0)),
+        // Negative price_cents are discount/adjustment lines — kept as-is so
+        // whoever claims the item can claim its discount too.
+        price_cents: Math.round(Number(it.price_cents) || 0),
         sort: i,
       }));
     if (items.length === 0) {
@@ -296,6 +300,7 @@ Deno.serve(async (req) => {
 
     return json({
       items,
+      merchant_name: typeof parsed.merchant_name === "string" ? parsed.merchant_name.slice(0, 80) : null,
       subtotal_cents: parsed.subtotal_cents ?? null,
       tax_cents: parsed.tax_cents ?? null,
       tip_cents: parsed.tip_cents ?? null,

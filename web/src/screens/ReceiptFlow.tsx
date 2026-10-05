@@ -55,11 +55,12 @@ function parseQty(s: string): number | null {
   return Number.isFinite(n) && n >= 1 ? n : null;
 }
 
-/** Parsed amount in cents, or null when the field doesn't hold a valid amount. */
+/** Parsed amount in cents, or null when the field doesn't hold a valid amount.
+ *  Negative values are allowed: discount/adjustment lines carry them. */
 function parseAmountCents(s: string): number | null {
   if (s.trim() === "") return null;
   const n = parseFloat(s);
-  return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) : null;
+  return Number.isFinite(n) ? Math.round(n * 100) : null;
 }
 
 export interface EditReceiptData {
@@ -154,6 +155,10 @@ export default function ReceiptFlow({
         }))
       );
       if (data.total_cents != null) setTotalStr(centsToDollars(data.total_cents));
+      // Autofill the receipt name from the merchant, but never overwrite
+      // something the user already typed.
+      const merchant = (data.merchant_name ?? "").trim();
+      if (merchant && !name.trim()) setName(merchant.slice(0, 80));
       if (typeof data.scans_remaining === "number") setScansLeft(data.scans_remaining);
       setStep("correct");
     } catch (e) {

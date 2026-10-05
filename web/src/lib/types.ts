@@ -70,6 +70,7 @@ export interface OcrLineItem {
 
 export interface OcrResult {
   items: OcrLineItem[];
+  merchant_name?: string | null;
   subtotal_cents: number | null;
   tax_cents: number | null;
   tip_cents: number | null;

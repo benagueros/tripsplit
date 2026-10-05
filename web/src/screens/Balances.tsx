@@ -40,6 +40,26 @@ export default function Balances({
   const balances = useMemo(() => netBalances(shares), [shares]);
   const settlements = useMemo(() => simplifyDebts(balances), [balances]);
 
+  // Per-receipt unclaimed summary: items nobody has claimed yet. Their cost
+  // currently splits evenly across everyone — surface that so the group can
+  // see what's still up for grabs instead of finding out by text.
+  const unclaimedByExpense = useMemo(() => {
+    const map = new Map<string, { count: number; total: number; cents: number }>();
+    for (const e of data.expenses) {
+      if (e.type !== "receipt") continue;
+      const items = data.receiptItems.filter((it) => it.expense_id === e.id);
+      const un = items.filter((it) => (data.claims.get(it.id) ?? []).length === 0);
+      if (un.length > 0) {
+        map.set(e.id, {
+          count: un.length,
+          total: items.length,
+          cents: un.reduce((a, it) => a + it.price_cents, 0),
+        });
+      }
+    }
+    return map;
+  }, [data]);
+
   // Payments already recorded reduce what's still owed.
   const remaining = useMemo(() => {
     const map = new Map<string, number>();
@@ -208,6 +228,15 @@ export default function Balances({
               Delete
             </button>
           </div>
+          {(() => {
+            const u = unclaimedByExpense.get(e.id);
+            if (!u) return null;
+            return (
+              <div className="muted" style={{ marginTop: 6 }}>
+                {u.count} of {u.total} items unclaimed · {formatMoney(u.cents)} splitting evenly for now
+              </div>
+            );
+          })()}
         </div>
       ))}
 

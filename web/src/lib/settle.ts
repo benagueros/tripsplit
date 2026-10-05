@@ -103,7 +103,9 @@ export function computeShares(args: {
     }
     const itemsSubtotal = items.reduce((a, it) => a + it.price_cents, 0);
     const unclaimed = itemsSubtotal - claimedTotal;
-    if (unclaimed > 0 && members.length > 0) {
+    // Unclaimed lines split evenly across all members — including negative
+    // ones (unclaimed discounts), so consumed always reconciles with the total.
+    if (unclaimed !== 0 && members.length > 0) {
       const shares = splitCentsEvenly(unclaimed, members.length);
       members.forEach((m, k) =>
         memberSubtotals.set(m.id, (memberSubtotals.get(m.id) ?? 0) + shares[k])
