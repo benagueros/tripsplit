@@ -180,6 +180,10 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
 
+  // Tracks the quota reservation row so the outer catch can roll it back
+  // if anything unexpected throws after the insert.
+  let reservationId: string | null = null;
+
   try {
     const tripId = await verifyTripJwt(req.headers.get("authorization"));
     if (!tripId) return json({ error: "Not authorized for this trip." }, 401);
@@ -215,8 +219,15 @@ Deno.serve(async (req) => {
       console.error("ocr-scan: usage reservation failed", usageErr?.message);
       return json({ error: "Something went wrong — try again." }, 500);
     }
-    const releaseReservation = () =>
-      supabase.from("scan_usage").delete().eq("id", usageRow.id);
+    reservationId = usageRow.id as string;
+    // Idempotent: nulls out after deleting so a second call is a no-op.
+    const releaseReservation = async () => {
+      if (reservationId) {
+        const id = reservationId;
+        reservationId = null;
+        await supabase.from("scan_usage").delete().eq("id", id);
+      }
+    };
 
     const { count } = await supabase.from("scan_usage")
       .select("id", { count: "exact", head: true })
@@ -293,6 +304,16 @@ Deno.serve(async (req) => {
     });
   } catch (e) {
     console.error(e);
+    // Roll back the quota reservation if one was made: an unexpected throw
+    // must not burn a scan.
+    if (reservationId) {
+      const id = reservationId;
+      reservationId = null;
+      await supabase.from("scan_usage").delete().eq("id", id).then(
+        () => {},
+        (delErr) => console.error("ocr-scan: reservation rollback failed", delErr?.message ?? delErr),
+      );
+    }
     return json({ error: "Something went wrong — try again." }, 500);
   }
 });
