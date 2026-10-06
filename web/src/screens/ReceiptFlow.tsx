@@ -119,6 +119,13 @@ export default function ReceiptFlow({
   const [saving, setSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  // Latest name value for async handlers (e.g. the scan callback): reading
+  // `name` directly would capture state as of render time and could clobber
+  // text typed while a scan is in flight.
+  const nameValueRef = useRef(name);
+  useEffect(() => {
+    nameValueRef.current = name;
+  }, [name]);
 
   // Tick a seconds counter while a scan is in flight so the status copy can
   // escalate honestly on slow reads instead of staring back silently.
@@ -158,7 +165,7 @@ export default function ReceiptFlow({
       // Autofill the receipt name from the merchant, but never overwrite
       // something the user already typed.
       const merchant = (data.merchant_name ?? "").trim();
-      if (merchant && !name.trim()) setName(merchant.slice(0, 80));
+      if (merchant && !nameValueRef.current.trim()) setName(merchant.slice(0, 80));
       if (typeof data.scans_remaining === "number") setScansLeft(data.scans_remaining);
       setStep("correct");
     } catch (e) {

@@ -182,9 +182,23 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
 
-  // Tracks the quota reservation row so the outer catch can roll it back
-  // if anything unexpected throws after the insert.
+  // Tracks the quota reservation row so it can be rolled back on any
+  // failure path. releaseReservation never throws: a failed rollback logs
+  // instead of masking the original error or burning the scan.
   let reservationId: string | null = null;
+  const releaseReservation = async () => {
+    if (!reservationId) return;
+    const id = reservationId;
+    reservationId = null;
+    try {
+      await supabase.from("scan_usage").delete().eq("id", id);
+    } catch (delErr) {
+      console.error(
+        "ocr-scan: reservation rollback failed",
+        delErr instanceof Error ? delErr.message : delErr,
+      );
+    }
+  };
 
   try {
     const tripId = await verifyTripJwt(req.headers.get("authorization"));
@@ -222,15 +236,6 @@ Deno.serve(async (req) => {
       return json({ error: "Something went wrong — try again." }, 500);
     }
     reservationId = usageRow.id as string;
-    // Idempotent: nulls out after deleting so a second call is a no-op.
-    const releaseReservation = async () => {
-      if (reservationId) {
-        const id = reservationId;
-        reservationId = null;
-        await supabase.from("scan_usage").delete().eq("id", id);
-      }
-    };
-
     const { count } = await supabase.from("scan_usage")
       .select("id", { count: "exact", head: true })
       .eq("trip_id", tripId)
@@ -311,14 +316,7 @@ Deno.serve(async (req) => {
     console.error(e);
     // Roll back the quota reservation if one was made: an unexpected throw
     // must not burn a scan.
-    if (reservationId) {
-      const id = reservationId;
-      reservationId = null;
-      await supabase.from("scan_usage").delete().eq("id", id).then(
-        () => {},
-        (delErr) => console.error("ocr-scan: reservation rollback failed", delErr?.message ?? delErr),
-      );
-    }
+    await releaseReservation();
     return json({ error: "Something went wrong — try again." }, 500);
   }
 });
