@@ -280,15 +280,9 @@ export default function ReceiptFlow({
       setError(`Total (${formatMoney(totalCents)}) can't be less than the items (${formatMoney(itemsSubtotal)}).`);
       return;
     }
-    // Block saving when more is assigned than the line item has (qty > 1
-    // lines only — a qty-1 line split several ways is shares, not quantities).
-    for (const it of parsedItems) {
-      const assigned = (claims.get(it.tempId) ?? []).reduce((a, c) => a + c.qty, 0);
-      if (it.qty > 1 && assigned > it.qty) {
-        setError(`"${it.name || "An item"}" has ${it.qty} but ${assigned} are assigned. Lower a quantity to continue.`);
-        return;
-      }
-    }
+    // Note: claim quantities are proportional shares (settle.ts splits by
+    // weight), so any number of people can split any line — no cap against
+    // the item's qty. The math reconciles to the line total regardless.
     setSaving(true);
     try {
       const payload = {
@@ -548,11 +542,6 @@ export default function ReceiptFlow({
                         </div>
                       );
                     })}
-                    {it.qty > 1 && totalQty > it.qty && (
-                      <div className="err">
-                        Assigned {totalQty} of {it.qty} — lower a quantity to save.
-                      </div>
-                    )}
                   </div>
                 )}
               </div>

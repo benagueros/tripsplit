@@ -25,26 +25,46 @@ export default function SplitByDay({
   const [name, setName] = useState("");
   const [totalStr, setTotalStr] = useState("");
   const [paidBy, setPaidBy] = useState(members[0]?.id ?? "");
-  const [unitCount, setUnitCount] = useState(2);
+  // Kept as raw text so the field can be cleared and retyped freely —
+  // coercing "" to a number mid-typing is what produced the "13" bug.
+  const [unitCountStr, setUnitCountStr] = useState("2");
   const [units, setUnits] = useState<string[][]>([[], []]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const cfg = PRESETS[preset];
 
+  // The effective count: clamped when the text parses, otherwise the
+  // actual number of rows (so clearing the field doesn't collapse them).
+  const parsedCount = parseInt(unitCountStr, 10);
+  const unitCount = Number.isFinite(parsedCount)
+    ? Math.max(1, Math.min(31, parsedCount))
+    : units.length;
+
   const changePreset = (p: Preset) => {
     setPreset(p);
     // keep counts, just relabel
   };
 
-  const changeCount = (n: number) => {
-    const c = Math.max(1, Math.min(31, n || 1));
-    setUnitCount(c);
+  // Resize the per-night/day rows on valid input; invalid/empty input
+  // leaves existing rows untouched so typing is never clobbered.
+  const commitCount = (raw: string) => {
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n)) return;
+    const c = Math.max(1, Math.min(31, n));
     setUnits((prev) => {
       const next = [...prev];
       while (next.length < c) next.push([]);
       return next.slice(0, c);
     });
+  };
+
+  const normalizeCount = () => {
+    // On blur, snap the text to the actual row count if it's empty/invalid.
+    const n = parseInt(unitCountStr, 10);
+    setUnitCountStr(
+      String(Number.isFinite(n) ? Math.max(1, Math.min(31, n)) : units.length)
+    );
   };
 
   const toggle = (unitIdx: number, memberId: string) =>
@@ -143,8 +163,12 @@ export default function SplitByDay({
         <label className="field" style={{ width: 90 }}>
           {cfg.unitLabelPlural}
           <input
-            type="number" min="1" max="31" value={unitCount}
-            onChange={(e) => changeCount(parseInt(e.target.value))}
+            type="number" min="1" max="31" value={unitCountStr}
+            onChange={(e) => {
+              setUnitCountStr(e.target.value);
+              commitCount(e.target.value);
+            }}
+            onBlur={normalizeCount}
           />
         </label>
       </div>
