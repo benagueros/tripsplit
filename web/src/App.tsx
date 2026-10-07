@@ -109,8 +109,8 @@ export default function App() {
           <>
             <h1>Snap. Claim. Settled.</h1>
             <p className="muted">
-              Share one link in the group chat and you're done. Split the
-              bill, not the friendship.
+              Share one link in the group chat and you're done. Math handled,
+              vibes intact.
             </p>
             <button className="btn" onClick={() => setLanding("create")}>
               Start a trip
