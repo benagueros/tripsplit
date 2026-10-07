@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { functionsUrl, getTripJwt } from "../lib/supabase";
+import { startPlusCheckout } from "../lib/plus";
 
 type SubState = {
   cancel_at_period_end: boolean;
@@ -37,14 +38,7 @@ export default function UpgradeCard({ tier }: { tier: string }) {
       setBusy(true);
       setError(null);
       try {
-        const res = await fetch(functionsUrl("polar-checkout"), {
-          method: "POST",
-          headers: { Authorization: `Bearer ${getTripJwt()}` },
-        });
-        const data = (await res.json()) as { url?: string; error?: string };
-        if (!res.ok) throw new Error(data.error ?? "Couldn't start checkout.");
-        if (!data.url) throw new Error("Checkout URL missing.");
-        window.location.href = data.url;
+        await startPlusCheckout();
       } catch (e) {
         setError(e instanceof Error ? e.message : "Couldn't start checkout.");
         setBusy(false);

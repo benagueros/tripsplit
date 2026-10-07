@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Session } from "../App";
-import { getReceiptForEdit, useTripData } from "../lib/store";
+import { addMember, getReceiptForEdit, removeMember, useTripData } from "../lib/store";
 import { formatMoney } from "../lib/money";
 import ShareTrip from "./ShareTrip";
 import ReceiptFlow, { type EditReceiptData } from "./ReceiptFlow";
@@ -8,6 +8,7 @@ import SimpleExpense from "./SimpleExpense";
 import SplitByDay from "./SplitByDay";
 import Balances from "./Balances";
 import UpgradeCard from "./UpgradeCard";
+import InstallPrompt from "../components/InstallPrompt";
 import Logo from "../components/Logo";
 
 type View =
@@ -32,6 +33,28 @@ export default function TripView({
   const [editData, setEditData] = useState<EditReceiptData | null>(null);
   const [editLoading, setEditLoading] = useState(false);
   const [justUpgraded, setJustUpgraded] = useState(false);
+  const [memberError, setMemberError] = useState<string | null>(null);
+  const [addingMember, setAddingMember] = useState(false);
+  const [newMemberName, setNewMemberName] = useState("");
+  const [memberBusy, setMemberBusy] = useState(false);
+  // First-visit hint, once per trip per device. The viral loop brings people
+  // who have never seen the app — a two-line explainer converts exposure
+  // into comprehension.
+  const [showHowto, setShowHowto] = useState(() => {
+    try {
+      return !localStorage.getItem(`tripsplit_howto_${session.trip.id}`);
+    } catch {
+      return false;
+    }
+  });
+  const dismissHowto = () => {
+    setShowHowto(false);
+    try {
+      localStorage.setItem(`tripsplit_howto_${session.trip.id}`, "1");
+    } catch {
+      /* private mode — hint just shows again next visit */
+    }
+  };
   const { data, error, loading, reload } = useTripData(session.trip.id);
 
   // Polar redirects back here with ?upgraded=1 after a successful checkout.
@@ -59,6 +82,39 @@ export default function TripView({
       alert(e instanceof Error ? e.message : "Couldn't load that receipt.");
     } finally {
       setEditLoading(false);
+    }
+  };
+
+  const doAddMember = async () => {
+    setMemberError(null);
+    if (!newMemberName.trim()) {
+      setMemberError("Enter a name.");
+      return;
+    }
+    setMemberBusy(true);
+    try {
+      await addMember(session.trip.id, newMemberName);
+      setNewMemberName("");
+      setAddingMember(false);
+      reload();
+    } catch (e) {
+      setMemberError(e instanceof Error ? e.message : "Couldn't add them.");
+    } finally {
+      setMemberBusy(false);
+    }
+  };
+
+  const doRemoveMember = async (id: string, name: string) => {
+    setMemberError(null);
+    if (!window.confirm(`Remove ${name} from this trip?`)) return;
+    setMemberBusy(true);
+    try {
+      await removeMember(id);
+      reload();
+    } catch (e) {
+      setMemberError(e instanceof Error ? e.message : "Couldn't remove them.");
+    } finally {
+      setMemberBusy(false);
     }
   };
 
@@ -142,6 +198,23 @@ export default function TripView({
               <div className="muted">200 receipt scans/month for this trip.</div>
             </div>
           )}
+          {showHowto && (
+            <div className="card" style={{ borderColor: "var(--accent)" }}>
+              <div className="row between">
+                <div>
+                  <b>👋 New to TripSplit? Here's the flow</b>
+                  <div className="muted" style={{ marginTop: 4 }}>
+                    ① Scan a receipt &nbsp;② Tap what you had &nbsp;③ Settle up.
+                    No account, no app download — this link is your login.
+                  </div>
+                </div>
+                <button className="btn ghost small" onClick={dismissHowto}>
+                  Got it
+                </button>
+              </div>
+            </div>
+          )}
+          <InstallPrompt />
           {showShareNudge && (
             <div className="card">
               <div className="row between">
@@ -212,7 +285,57 @@ export default function TripView({
                       {data.members.map((m) => m.name).join(", ")}
                     </div>
                   </div>
+                  <button
+                    className="btn ghost small"
+                    disabled={memberBusy}
+                    onClick={() => {
+                      setMemberError(null);
+                      setAddingMember((v) => !v);
+                    }}
+                  >
+                    {addingMember ? "Cancel" : "＋ Add"}
+                  </button>
                 </div>
+                {data.members.length > 0 && (
+                  <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {data.members.map((m) => (
+                      <span key={m.id} className="pill">
+                        {m.name}
+                        <button
+                          className="pill-x"
+                          disabled={memberBusy}
+                          aria-label={`Remove ${m.name}`}
+                          onClick={() => doRemoveMember(m.id, m.name)}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {addingMember && (
+                  <div className="row" style={{ marginTop: 8, gap: 8 }}>
+                    <input
+                      type="text"
+                      className="grow"
+                      placeholder="Name (e.g. Maya)"
+                      value={newMemberName}
+                      disabled={memberBusy}
+                      onChange={(e) => setNewMemberName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") doAddMember();
+                      }}
+                    />
+                    <button className="btn small" disabled={memberBusy} onClick={doAddMember}>
+                      Add
+                    </button>
+                  </div>
+                )}
+                {memberError && (
+                  <div className="err" style={{ marginTop: 8 }}>
+                    {memberError}
+                  </div>
+                )}
               </div>
               <UpgradeCard tier={data.trip.tier} />
             </>

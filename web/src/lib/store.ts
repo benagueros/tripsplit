@@ -368,3 +368,55 @@ export async function deleteExpense(expenseId: string) {
   const { error } = await db.from("expenses").delete().eq("id", expenseId);
   if (error) throw error;
 }
+
+/** Add a member to an existing trip (for late joiners, plus-ones, ...). */
+export async function addMember(tripId: string, name: string) {
+  const clean = name.trim();
+  if (!clean) throw new Error("Enter a name.");
+  const db = authedClient();
+  // Names must stay unique (case-insensitive) within the trip — mirrors
+  // the trip-auth create validation so claims and settlements stay legible.
+  const { data: existing } = await db.from("members").select("name").eq("trip_id", tripId);
+  const names = ((existing ?? []) as { name: string }[]).map((m) => m.name.toLowerCase());
+  if (names.includes(clean.toLowerCase())) {
+    throw new Error("That name is already on this trip — add a last name or initial.");
+  }
+  const { data, error } = await db
+    .from("members")
+    .insert({ trip_id: tripId, name: clean })
+    .select()
+    .single();
+  if (error || !data) throw error ?? new Error("Couldn't add them.");
+  return data as { id: string; name: string };
+}
+
+/**
+ * Remove a member. Only allowed when they have no money tied to the trip —
+ * no expenses paid, no claims, no shares, no per-day participation, no
+ * payments. (Most of those cascade on delete, but paid_by and payments are
+ * RESTRICT, and silently dropping someone's history would corrupt balances.)
+ */
+export async function removeMember(memberId: string) {
+  const db = authedClient();
+  const { data: member } = await db
+    .from("members")
+    .select("id, name")
+    .eq("id", memberId)
+    .single();
+  if (!member) throw new Error("Person not found.");
+  const checks = await Promise.all([
+    db.from("expenses").select("id", { count: "exact", head: true }).eq("paid_by_member_id", memberId),
+    db.from("item_claims").select("id", { count: "exact", head: true }).eq("member_id", memberId),
+    db.from("simple_shares").select("id", { count: "exact", head: true }).eq("member_id", memberId),
+    db.from("per_day_participants").select("unit_id", { count: "exact", head: true }).eq("member_id", memberId),
+    db.from("payments").select("id", { count: "exact", head: true })
+      .or(`from_member_id.eq.${memberId},to_member_id.eq.${memberId}`),
+  ]);
+  if (checks.some((r) => (r.count ?? 0) > 0)) {
+    throw new Error(
+      `${(member as { name: string }).name} has expenses, claims, or payments on this trip — settle up first.`
+    );
+  }
+  const { error } = await db.from("members").delete().eq("id", memberId);
+  if (error) throw error;
+}

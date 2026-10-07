@@ -138,3 +138,19 @@ label.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; 
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+/* Member pills with remove affordance (trip people card). */
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--card2); border: 1px solid var(--line);
+  border-radius: 999px; padding: 6px 6px 6px 12px;
+  font-size: 14px; color: var(--text);
+}
+.pill-x {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%;
+  border: none; background: transparent; color: var(--muted);
+  font-size: 16px; line-height: 1; cursor: pointer; padding: 0;
+}
+.pill-x:hover { background: var(--line); color: var(--text); }
+.pill-x:disabled { opacity: 0.4; cursor: default; }

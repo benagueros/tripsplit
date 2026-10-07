@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { functionsUrl, getTripJwt } from "../lib/supabase";
 import { centsToDollars, dollarsToCents, formatMoney } from "../lib/money";
 import { saveReceiptExpense, updateReceiptExpense } from "../lib/store";
+import { startPlusCheckout } from "../lib/plus";
 import type { Member, OcrResult } from "../lib/types";
 
 interface DraftItem {
@@ -101,6 +102,10 @@ export default function ReceiptFlow({
   const [scanSecs, setScanSecs] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [scansLeft, setScansLeft] = useState<number | null>(null);
+  // True when the last scan failed on the monthly quota — the error area
+  // then offers a direct upgrade path instead of a dead end.
+  const [quotaBlocked, setQuotaBlocked] = useState(false);
+  const [upgrading, setUpgrading] = useState(false);
   const [items, setItems] = useState<DraftItem[]>(
     editData
       ? editData.items.map((it, i) => ({
@@ -138,6 +143,7 @@ export default function ReceiptFlow({
 
   const scan = async (file: File) => {
     setError(null);
+    setQuotaBlocked(false);
     setScanning(true);
     try {
       const buf = await file.arrayBuffer();
@@ -151,8 +157,14 @@ export default function ReceiptFlow({
         },
         body: JSON.stringify({ image_base64, mime_type: "image/jpeg" }),
       });
-      const data = (await res.json()) as OcrResult & { error?: string; scans_remaining?: number };
-      if (!res.ok) throw new Error(data.error ?? "Scan failed.");
+      const data = (await res.json()) as OcrResult & { error?: string; scans_remaining?: number; quota_exceeded?: boolean };
+      if (!res.ok) {
+        // Surface the paywall as an upgrade opportunity, not a dead end:
+        // this is the highest-intent conversion moment in the product.
+        if (data.quota_exceeded) setQuotaBlocked(true);
+        throw new Error(data.error ?? "Scan failed.");
+      }
+      setQuotaBlocked(false);
       setItems(
         data.items.map((it, i) => ({
           tempId: `tmp-${i}`,
@@ -306,6 +318,29 @@ export default function ReceiptFlow({
         <i className={step === "claim" ? "on" : ""} />
       </div>
       {error && <div className="err">{error}</div>}
+      {quotaBlocked && (
+        <div className="card" style={{ borderColor: "var(--accent)" }}>
+          <b>✨ TripSplit Plus</b>
+          <div className="muted" style={{ margin: "6px 0 12px" }}>
+            200 receipt scans/month for this trip · $2.99/mo. Keep scanning right now.
+          </div>
+          <button
+            className="btn"
+            disabled={upgrading}
+            onClick={async () => {
+              setUpgrading(true);
+              try {
+                await startPlusCheckout();
+              } catch (e) {
+                setError(e instanceof Error ? e.message : "Couldn't start checkout.");
+                setUpgrading(false);
+              }
+            }}
+          >
+            {upgrading ? "…" : "Upgrade this trip"}
+          </button>
+        </div>
+      )}
 
       {step === "scan" && (
         <>
