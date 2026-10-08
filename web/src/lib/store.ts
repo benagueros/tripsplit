@@ -386,7 +386,15 @@ export async function addMember(tripId: string, name: string) {
     .insert({ trip_id: tripId, name: clean })
     .select()
     .single();
-  if (error || !data) throw error ?? new Error("Couldn't add them.");
+  if (error) {
+    // Unique index members_trip_name_ci (trip_id, lower(name)): the pre-check
+    // above can lose a race between two tabs — surface the friendly message.
+    if (error.code === "23505") {
+      throw new Error("That name is already on this trip — add a last name or initial.");
+    }
+    throw error;
+  }
+  if (!data) throw new Error("Couldn't add them.");
   return data as { id: string; name: string };
 }
 
