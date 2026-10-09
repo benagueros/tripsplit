@@ -20,9 +20,10 @@ export default function CreateTrip({
 
   const submit = async () => {
     setError(null);
-    const clean = names.map((n) => n.trim()).filter(Boolean);
+    const clean = names.map((n) => n.trim().normalize("NFC")).filter(Boolean);
     if (!name.trim()) { setError("Give the trip a name."); return; }
     if (clean.length < 2) { setError("Add at least two people."); return; }
+    if (clean.some((n) => n.length > 40)) { setError("Keep names to 40 characters or less."); return; }
     const lowered = clean.map((n) => n.toLowerCase());
     if (new Set(lowered).size !== lowered.length) {
       setError("Names must be unique — add a last name or initial to tell duplicates apart.");
@@ -57,6 +58,7 @@ export default function CreateTrip({
             type="text"
             placeholder={`Person ${i + 1}`}
             value={n}
+            maxLength={40}
             onChange={(e) => setNameAt(i, e.target.value)}
           />
           {names.length > 2 && (

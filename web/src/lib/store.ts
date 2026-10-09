@@ -371,8 +371,11 @@ export async function deleteExpense(expenseId: string) {
 
 /** Add a member to an existing trip (for late joiners, plus-ones, ...). */
 export async function addMember(tripId: string, name: string) {
-  const clean = name.trim();
+  // NFC-normalize so visually identical names ("José" precomposed vs.
+  // e + combining accent) can't slip past uniqueness as two members.
+  const clean = name.trim().normalize("NFC");
   if (!clean) throw new Error("Enter a name.");
+  if (clean.length > 40) throw new Error("Keep names to 40 characters or less.");
   const db = authedClient();
   // Names must stay unique (case-insensitive) within the trip — mirrors
   // the trip-auth create validation so claims and settlements stay legible.

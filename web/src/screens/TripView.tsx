@@ -319,6 +319,7 @@ export default function TripView({
                       type="text"
                       className="grow"
                       placeholder="Name (e.g. Maya)"
+                      maxLength={40}
                       value={newMemberName}
                       disabled={memberBusy}
                       onChange={(e) => setNewMemberName(e.target.value)}
