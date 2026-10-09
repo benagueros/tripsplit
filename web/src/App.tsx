@@ -5,6 +5,7 @@ import type { Member, Trip } from "./lib/types";
 import CreateTrip from "./screens/CreateTrip";
 import JoinTrip from "./screens/JoinTrip";
 import TripView from "./screens/TripView";
+import Landing from "./screens/Landing";
 import Logo from "./components/Logo";
 
 export interface Session {
@@ -61,6 +62,11 @@ export default function App() {
     boot();
   }, [boot]);
 
+  // The landing page is long; start each landing view at the top.
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [landing]);
+
   const handleCreate = async (name: string, memberNames: string[]) => {
     const s = await createTrip(name, memberNames);
     setSession({ trip: s.trip, members: s.members });
@@ -85,11 +91,12 @@ export default function App() {
 
   if (booting) {
     return (
-      <div className="screen center" style={{ paddingTop: 80 }}>
-        <div className="logo" style={{ fontSize: 32, fontWeight: 800 }}>
-          Trip<span style={{ color: "var(--accent)" }}>Split</span>
+      <div className="boot">
+        <div>
+          <Logo />
+          <div className="spinner" role="status" aria-label="Loading" />
+          <p className="muted">Loading…</p>
         </div>
-        <p className="muted">Loading…</p>
       </div>
     );
   }
@@ -98,28 +105,19 @@ export default function App() {
     return <TripView session={session} onLeave={handleLeave} onStartNewTrip={handleStartNewTrip} />;
   }
 
+  if (landing === "choose") {
+    return <Landing error={error} onStart={() => setLanding("create")} onJoin={() => setLanding("join")} />;
+  }
+
   return (
     <div>
-      <div className="topbar">
-        <Logo />
-      </div>
+      <header className="topbar">
+        <div className="topbar-in">
+          <Logo />
+        </div>
+      </header>
       <div className="screen">
         {error && <div className="err">{error}</div>}
-        {landing === "choose" && (
-          <>
-            <h1>Snap. Claim. Settled.</h1>
-            <p className="muted">
-              Share one link in the group chat and you're done. Math handled,
-              vibes intact.
-            </p>
-            <button className="btn" onClick={() => setLanding("create")}>
-              Start a trip
-            </button>
-            <button className="btn secondary" onClick={() => setLanding("join")}>
-              Join with a link or code
-            </button>
-          </>
-        )}
         {landing === "create" && (
           <CreateTrip
             onBack={() => setLanding("choose")}

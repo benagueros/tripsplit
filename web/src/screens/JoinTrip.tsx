@@ -1,4 +1,5 @@
 import { useState } from "react";
+import Icon from "../components/Icon";
 
 export default function JoinTrip({
   onBack,
@@ -28,27 +29,36 @@ export default function JoinTrip({
 
   return (
     <>
-      <h1>Join a trip</h1>
-      <p className="muted">
-        Paste the link from the group chat, or type the short code (like{" "}
-        <b>CANYON-482193</b>).
-      </p>
+      <div className="screen-head">
+        <span className="eyebrow">Join</span>
+        <h1>Join a trip</h1>
+        <p className="muted">
+          Paste the link from the group chat, or type the short code (like{" "}
+          <b style={{ color: "var(--ink)" }}>CANYON-482193</b>).
+        </p>
+      </div>
       {error && <div className="err">{error}</div>}
       <input
         type="text"
         placeholder="Trip link or code"
         value={value}
         onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") submit();
+        }}
         autoCapitalize="off"
         autoCorrect="off"
       />
       <button className="btn" disabled={joining} onClick={submit}>
-        {joining ? "Joining…" : "Join trip"}
+        {joining ? "Joining…" : <>Join trip <Icon name="arrowRight" size={18} /></>}
       </button>
-      <p className="muted" style={{ marginTop: 16 }}>
-        New to TripSplit? It splits group expenses with no app download and no
-        signup — the link is all you need.
-      </p>
+      <div className="info" style={{ marginTop: 10 }}>
+        <Icon name="sparkle" size={18} />
+        <span>
+          New to TripSplit? It splits group expenses with no app download and no
+          signup — the link is all you need.
+        </span>
+      </div>
       <button className="btn ghost" onClick={onBack}>Back</button>
     </>
   );

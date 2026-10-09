@@ -4,6 +4,12 @@ import { centsToDollars, dollarsToCents, formatMoney } from "../lib/money";
 import { saveReceiptExpense, updateReceiptExpense } from "../lib/store";
 import { startPlusCheckout } from "../lib/plus";
 import type { Member, OcrResult } from "../lib/types";
+import Icon from "../components/Icon";
+import { Avatar, PersonChip } from "../components/Person";
+import { SnapArt } from "../components/FeatureArt";
+
+const STEPS = ["scan", "correct", "claim"] as const;
+const STEP_LABELS = ["Scan", "Check", "Claim"];
 
 interface DraftItem {
   tempId: string;
@@ -33,9 +39,9 @@ function QtyInput({
     <input
       type="text"
       inputMode="numeric"
+      className="qty"
       value={text}
       aria-label={ariaLabel}
-      style={{ width: 56 }}
       onChange={(e) => {
         const v = e.target.value;
         setText(v);
@@ -118,9 +124,17 @@ export default function ReceiptFlow({
   );
   const [name, setName] = useState(editData?.name ?? "");
   const [totalStr, setTotalStr] = useState(editData ? centsToDollars(editData.totalCents) : "");
-  const [paidBy, setPaidBy] = useState(editData?.paidBy ?? members[0]?.id ?? "");
+  const [paidByChoice, setPaidBy] = useState(editData?.paidBy ?? members[0]?.id ?? "");
   const [claims, setClaims] = useState<Map<string, ItemClaim[]>>(initialClaims);
-  const [viewingAs, setViewingAs] = useState(members[0]?.id ?? "");
+  const [viewerChoice, setViewingAs] = useState(members[0]?.id ?? "");
+  // The flow can stay open (hidden) while people are removed from the trip,
+  // so drop anyone who is gone before showing or saving.
+  const memberIds = new Set(members.map((m) => m.id));
+  const paidBy = memberIds.has(paidByChoice) ? paidByChoice : members[0]?.id ?? "";
+  const viewingAs = memberIds.has(viewerChoice) ? viewerChoice : members[0]?.id ?? "";
+  const liveClaims = new Map(
+    [...claims].map(([itemId, cs]) => [itemId, cs.filter((c) => memberIds.has(c.member_id))])
+  );
   const [saving, setSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
@@ -290,7 +304,7 @@ export default function ReceiptFlow({
         totalCents,
         paidBy,
         items: parsedItems.map(({ tempId, name, qty, price_cents }) => ({ tempId, name, qty, price_cents })),
-        claims,
+        claims: liveClaims,
       };
       if (editing && editData) {
         await updateReceiptExpense({ expenseId: editData.expenseId, ...payload });
@@ -304,19 +318,30 @@ export default function ReceiptFlow({
     }
   };
 
+  const stepIdx = STEPS.indexOf(step);
+  const taxTip = Math.max(0, (() => { try { return dollarsToCents(totalStr); } catch { return 0; } })() - itemsSubtotal);
+
   return (
     <>
-      <div className="stepdots">
-        <i className={step === "scan" ? "on" : ""} />
-        <i className={step === "correct" ? "on" : ""} />
-        <i className={step === "claim" ? "on" : ""} />
-      </div>
+      <ol className="stepper" aria-label="Receipt steps">
+        {STEP_LABELS.map((label, i) => (
+          <li key={label} className={i === stepIdx ? "on" : i < stepIdx ? "done" : ""} aria-current={i === stepIdx ? "step" : undefined}>
+            <span>{i < stepIdx ? <Icon name="check" size={13} /> : i + 1}</span>
+            {label}
+          </li>
+        ))}
+      </ol>
       {error && <div className="err">{error}</div>}
       {quotaBlocked && (
-        <div className="card" style={{ borderColor: "var(--accent)" }}>
-          <b>✨ TripSplit Plus</b>
-          <div className="muted" style={{ margin: "6px 0 12px" }}>
-            200 receipt scans/month for this trip · $2.99/mo. Keep scanning right now.
+        <div className="card glow">
+          <div className="row">
+            <span className="tile"><Icon name="sparkle" size={22} /></span>
+            <div className="grow">
+              <b>TripSplit Plus</b>
+              <div className="muted">
+                200 receipt scans/month for this trip · $2.99/mo. Keep scanning right now.
+              </div>
+            </div>
           </div>
           <button
             className="btn"
@@ -338,12 +363,14 @@ export default function ReceiptFlow({
 
       {step === "scan" && (
         <>
-          <h1>Scan receipt</h1>
-          <p className="muted">
-            Snap the receipt — line items get pulled out automatically. You'll
-            correct anything it misreads next.
-            {scansLeft !== null && ` ${scansLeft} scans left this month.`}
-          </p>
+          <div className="screen-head">
+            <h1>Scan receipt</h1>
+            <p className="muted">
+              Snap the receipt — line items get pulled out automatically. You'll
+              correct anything it misreads next.
+              {scansLeft !== null && ` ${scansLeft} scans left this month.`}
+            </p>
+          </div>
           <input
             ref={fileRef}
             type="file"
@@ -358,44 +385,46 @@ export default function ReceiptFlow({
               if (f) scan(f);
             }}
           />
-          {scanning ? (
-            <div className="card center" aria-live="polite">
-              <div className="spinner" role="status" aria-label="Reading receipt" />
-              <b>Reading your receipt…</b>
-              <div className="muted" style={{ marginTop: 6 }}>
-                {scanSecs < 12
-                  ? "This usually takes 10–20 seconds."
-                  : "Still working — the reader is being thorough. Hang tight."}
-              </div>
-            </div>
-          ) : (
-          <div className="btnrow">
-            <button
-              className="btn"
-              disabled={scanning}
-              onClick={() => {
-                // capture="environment" opens the rear camera directly.
-                fileRef.current?.setAttribute("capture", "environment");
-                fileRef.current?.click();
-              }}
-            >
-              📷 Take photo
-            </button>
-            <button
-              className="btn secondary"
-              disabled={scanning}
-              onClick={() => {
-                // No capture attribute: the OS offers camera OR photo library.
-                fileRef.current?.removeAttribute("capture");
-                fileRef.current?.click();
-              }}
-            >
-              🖼️ Upload photo
-            </button>
+          <div className="stage scan-stage" aria-live="polite">
+            <SnapArt />
+            {scanning && (
+              <>
+                <b>Reading your receipt…</b>
+                <div className="muted" role="status">
+                  {scanSecs < 12
+                    ? "This usually takes 10–20 seconds."
+                    : "Still working — the reader is being thorough. Hang tight."}
+                </div>
+              </>
+            )}
           </div>
+          {!scanning && (
+            <div className="btnrow">
+              <button
+                className="btn"
+                onClick={() => {
+                  // capture="environment" opens the rear camera directly.
+                  fileRef.current?.setAttribute("capture", "environment");
+                  fileRef.current?.click();
+                }}
+              >
+                <Icon name="camera" /> Take photo
+              </button>
+              <button
+                className="btn secondary"
+                onClick={() => {
+                  // No capture attribute: the OS offers camera OR photo library.
+                  fileRef.current?.removeAttribute("capture");
+                  fileRef.current?.click();
+                }}
+              >
+                <Icon name="image" /> Upload photo
+              </button>
+            </div>
           )}
           <button
             className="btn ghost"
+            disabled={scanning}
             onClick={() => {
               setItems([{ tempId: "tmp-0", name: "", qty: "1", amount: "" }]);
               setStep("correct");
@@ -409,8 +438,10 @@ export default function ReceiptFlow({
 
       {step === "correct" && (
         <>
-          <h1>{editing ? "Edit receipt" : "Check the items"}</h1>
-          <p className="muted">Fix anything the scan got wrong.</p>
+          <div className="screen-head">
+            <h1>{editing ? "Edit receipt" : "Check the items"}</h1>
+            <p className="muted">Fix anything the scan got wrong.</p>
+          </div>
           <label className="field">
             Receipt name
             <input
@@ -437,43 +468,49 @@ export default function ReceiptFlow({
               />
             </label>
           </div>
-          {items.map((it) => (
-            <div className="card" key={it.tempId}>
-              <input
-                type="text" placeholder="Item name" value={it.name}
-                onChange={(e) => updateItem(it.tempId, { name: e.target.value })}
-              />
-              <div className="row">
-                <label className="field grow">
-                  Qty
+          <div className="paper-wrap">
+            <div className="paper">
+              {items.map((it) => (
+                <div className="item-edit" key={it.tempId}>
                   <input
-                    type="number" min="1" value={it.qty}
-                    onChange={(e) => updateItem(it.tempId, { qty: e.target.value })}
+                    type="text" placeholder="Item name" aria-label="Item name" value={it.name}
+                    onChange={(e) => updateItem(it.tempId, { name: e.target.value })}
                   />
-                </label>
-                <label className="field grow">
-                  Line total ($)
-                  <input
-                    type="number" inputMode="decimal" min="0" step="0.01"
-                    value={it.amount}
-                    onChange={(e) => updateItem(it.tempId, { amount: e.target.value })}
-                  />
-                </label>
-                <button className="btn ghost small" onClick={() => removeItem(it.tempId)} aria-label="Remove item">✕</button>
+                  <label className="field">
+                    Qty
+                    <input
+                      type="number" min="1" value={it.qty}
+                      onChange={(e) => updateItem(it.tempId, { qty: e.target.value })}
+                    />
+                  </label>
+                  <label className="field">
+                    Line total ($)
+                    <input
+                      type="number" inputMode="decimal" min="0" step="0.01"
+                      value={it.amount}
+                      onChange={(e) => updateItem(it.tempId, { amount: e.target.value })}
+                    />
+                  </label>
+                  <button className="icon-btn" onClick={() => removeItem(it.tempId)} aria-label="Remove item">
+                    <Icon name="trash" size={18} />
+                  </button>
+                </div>
+              ))}
+              <button
+                className="btn dashed"
+                onClick={() => setItems([...items, { tempId: `tmp-${Date.now()}`, name: "", qty: "1", amount: "" }])}
+              >
+                <Icon name="plus" size={18} /> Add item
+              </button>
+              <div className="subtotal">
+                <span>Items subtotal</span>
+                <b>{formatMoney(itemsSubtotal)}</b>
               </div>
             </div>
-          ))}
-          <button
-            className="btn ghost"
-            onClick={() => setItems([...items, { tempId: `tmp-${Date.now()}`, name: "", qty: "1", amount: "" }])}
-          >
-            + Add item
-          </button>
-          <div className="row between">
-            <span className="muted">Items subtotal</span>
-            <b>{formatMoney(itemsSubtotal)}</b>
           </div>
-          <button className="btn" onClick={nextToClaim}>Next: claim items →</button>
+          <button className="btn" onClick={nextToClaim}>
+            Next: claim items <Icon name="arrowRight" size={18} />
+          </button>
           {!editing && <button className="btn ghost" onClick={() => setStep("scan")}>← Back</button>}
           {editing && <button className="btn ghost" onClick={onCancel}>Cancel</button>}
         </>
@@ -481,64 +518,73 @@ export default function ReceiptFlow({
 
       {step === "claim" && (
         <>
-          <h1>Who had what?</h1>
-          <p className="muted">
-            Pass the phone around — or tap a line to split it between several people.
-          </p>
-          <label className="field">
-            Viewing as
-            <select value={viewingAs} onChange={(e) => setViewingAs(e.target.value)}>
-              {members.map((m) => (
-                <option key={m.id} value={m.id}>{m.name}</option>
+          <div className="screen-head">
+            <h1>Who had what?</h1>
+            <p className="muted">
+              Pass the phone around — or tap a line to split it between several people.
+            </p>
+          </div>
+          <div className="card">
+            <span className="eyebrow">Viewing as</span>
+            <div className="chiprow" role="group" aria-label="Viewing as">
+              {members.map((m, i) => (
+                <PersonChip
+                  key={m.id}
+                  name={m.name}
+                  index={i}
+                  on={viewingAs === m.id}
+                  onClick={() => setViewingAs(m.id)}
+                />
               ))}
-            </select>
-          </label>
-          <button className="btn secondary" onClick={claimAll}>
-            {members.find((m) => m.id === viewingAs)?.name} claims everything
-          </button>
+            </div>
+            <button className="btn secondary" onClick={claimAll}>
+              {members.find((m) => m.id === viewingAs)?.name} claims everything
+            </button>
+          </div>
           {parsedItems.map((it) => {
-            const assignees = claims.get(it.tempId) ?? [];
+            const assignees = liveClaims.get(it.tempId) ?? [];
             const totalQty = assignees.reduce((a, c) => a + c.qty, 0);
             const perUnit = it.qty > 0 ? Math.round(it.price_cents / it.qty) : it.price_cents;
             return (
-              <div className="card" key={it.tempId}>
-                <div className="row between">
-                  <div>
+              <div className={`card claim-item${assignees.length === 0 ? "" : " glow"}`} key={it.tempId}>
+                <div className="row between" style={{ alignItems: "flex-start" }}>
+                  <div className="grow">
                     <b>{it.name || "Unnamed item"}</b>
-                    <div className="muted">
+                    <div className="meta">
                       {it.qty} × {formatMoney(perUnit)} = {formatMoney(it.price_cents)}
                       {assignees.length > 1 &&
                         ` · split ${assignees.length} ways`}
                     </div>
                   </div>
+                  <div className="ex-amt">{formatMoney(it.price_cents)}</div>
                 </div>
                 <div className="chiprow">
-                  {members.map((m: Member) => (
-                    <button
+                  {members.map((m: Member, i) => (
+                    <PersonChip
                       key={m.id}
-                      className={`chip ${assignees.some((c) => c.member_id === m.id) ? "on" : ""}`}
+                      name={m.name}
+                      index={i}
+                      on={assignees.some((c) => c.member_id === m.id)}
                       onClick={() => toggleClaim(it.tempId, m.id)}
-                    >
-                      {m.name}
-                    </button>
+                    />
                   ))}
                 </div>
                 {assignees.length > 0 && (
-                  <div style={{ marginTop: 8 }}>
+                  <div className="assignees">
                     {assignees.map((c) => {
-                      const m = members.find((mm) => mm.id === c.member_id);
+                      const idx = members.findIndex((mm) => mm.id === c.member_id);
+                      const m = members[idx];
                       const share = totalQty > 0 ? Math.round((it.price_cents * c.qty) / totalQty) : 0;
                       return (
-                        <div key={c.member_id} className="row between" style={{ marginBottom: 4 }}>
+                        <div key={c.member_id} className="assignee">
+                          <Avatar name={m?.name ?? "?"} index={idx} small />
                           <span>{m?.name ?? "?"}</span>
-                          <span className="row" style={{ gap: 8, alignItems: "center" }}>
-                            <QtyInput
-                              value={c.qty}
-                              onCommit={(n) => setClaimQty(it.tempId, c.member_id, n)}
-                              ariaLabel={`Quantity for ${m?.name}`}
-                            />
-                            <span className="muted">{formatMoney(share)}</span>
-                          </span>
+                          <span className="share">{formatMoney(share)}</span>
+                          <QtyInput
+                            value={c.qty}
+                            onCommit={(n) => setClaimQty(it.tempId, c.member_id, n)}
+                            ariaLabel={`Quantity for ${m?.name}`}
+                          />
                         </div>
                       );
                     })}
@@ -547,10 +593,13 @@ export default function ReceiptFlow({
               </div>
             );
           })}
-          <p className="muted">
-            Tax + tip ({formatMoney(Math.max(0, (() => { try { return dollarsToCents(totalStr); } catch { return 0; } })() - itemsSubtotal))}) split
-            by everyone's share. Anything unclaimed splits evenly.
-          </p>
+          <div className="info">
+            <Icon name="sparkle" size={18} />
+            <span>
+              Tax + tip ({formatMoney(taxTip)}) split by everyone's share.
+              Anything unclaimed splits evenly.
+            </span>
+          </div>
           <button className="btn" disabled={saving} onClick={save}>
             {saving ? "Saving…" : editing ? "Save changes" : "Save receipt"}
           </button>

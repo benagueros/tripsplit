@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { tripLink } from "../lib/api";
+import Icon from "../components/Icon";
 import type { Trip } from "../lib/types";
 
 export default function ShareTrip({
@@ -30,15 +31,23 @@ export default function ShareTrip({
 
   return (
     <>
-      <h1>Share this trip</h1>
-      <p className="muted">
-        One link in the group chat and everyone's in — no accounts, no sign-up.
-      </p>
-      <div className="linkbox">{link}</div>
-      <button className="btn" onClick={() => copy(message)}>
-        {copied ? "Copied! ✓" : "Copy invite message"}
-      </button>
-      <div className="card center">
+      <div className="screen-head">
+        <span className="eyebrow">Invite</span>
+        <h1>Share this trip</h1>
+        <p className="muted">
+          One link in the group chat and everyone's in — no accounts, no sign-up.
+        </p>
+      </div>
+      <div className="card">
+        <div className="linkbox">
+          <Icon name="link" size={18} />
+          <span>{link}</span>
+        </div>
+        <button className="btn" onClick={() => copy(message)}>
+          {copied ? "Copied! ✓" : <><Icon name="copy" size={18} /> Copy invite message</>}
+        </button>
+      </div>
+      <div className="ticket">
         <div className="muted">Backup code (if the link gets lost)</div>
         <div className="bigcode">{trip.code}</div>
       </div>
