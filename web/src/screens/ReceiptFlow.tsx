@@ -135,6 +135,18 @@ export default function ReceiptFlow({
   const liveClaims = new Map(
     [...claims].map(([itemId, cs]) => [itemId, cs.filter((c) => memberIds.has(c.member_id))])
   );
+  // Remember member names as they're seen: if someone is removed while this
+  // flow is open, their draft claims are dropped from liveClaims (and would
+  // silently become "unclaimed" on save) — name them in a warning instead.
+  const memberNameCache = useRef(new Map<string, string>());
+  members.forEach((m) => memberNameCache.current.set(m.id, m.name));
+  const droppedClaimNames = [...new Set(
+    [...claims.values()]
+      .flat()
+      .map((c) => c.member_id)
+      .filter((id) => !memberIds.has(id))
+      .map((id) => memberNameCache.current.get(id) ?? "Someone")
+  )];
   const [saving, setSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
@@ -541,6 +553,12 @@ export default function ReceiptFlow({
               {members.find((m) => m.id === viewingAs)?.name} claims everything
             </button>
           </div>
+          {droppedClaimNames.length > 0 && (
+            <div className="warn">
+              {droppedClaimNames.join(", ")} {droppedClaimNames.length === 1 ? "was" : "were"} removed
+              from this trip — their claimed items will split evenly unless you reassign them.
+            </div>
+          )}
           {parsedItems.map((it) => {
             const assignees = liveClaims.get(it.tempId) ?? [];
             const totalQty = assignees.reduce((a, c) => a + c.qty, 0);

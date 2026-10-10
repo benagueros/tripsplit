@@ -327,7 +327,7 @@ export default function TripView({
                 <div className="card list">
                   {data.expenses.map((e) => {
                     const payer = data.members.find((m) => m.id === e.paid_by_member_id);
-                    const kind = EXPENSE_KIND[e.type];
+                    const kind = EXPENSE_KIND[e.type] ?? EXPENSE_KIND.receipt;
                     return (
                       <div className="ex-row" key={e.id}>
                         <span className={`tile receipt ${kind.tone}`}>
