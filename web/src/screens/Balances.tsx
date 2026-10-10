@@ -7,6 +7,8 @@ import {
 } from "../lib/settle";
 import { confirmPayment, deleteExpense, recordPayment, type TripData } from "../lib/store";
 import { venmoChargeLink, venmoPayLink } from "../lib/venmo";
+import Icon from "../components/Icon";
+import { Avatar } from "../components/Person";
 
 export default function Balances({
   data,
@@ -24,6 +26,10 @@ export default function Balances({
 
   const nameOf = (id: string) =>
     data.members.find((m) => m.id === id)?.name ?? "?";
+  const indexOf = (id: string) => data.members.findIndex((m) => m.id === id);
+  const person = (id: string, small?: boolean) => (
+    <Avatar name={nameOf(id)} index={indexOf(id)} small={small} />
+  );
 
   const shares = useMemo(
     () =>
@@ -113,28 +119,39 @@ export default function Balances({
   const pendingPayments = data.payments.filter((p) => p.status === "pending");
   const confirmedPayments = data.payments.filter((p) => p.status === "confirmed");
 
+  const maxAbs = Math.max(1, ...[...balances.values()].map(Math.abs));
+
   return (
     <>
       <div className="row">
-        <button className="btn ghost small" onClick={onBack}>← Expenses</button>
+        <button className="btn ghost small" onClick={onBack}>
+          <Icon name="arrowLeft" size={16} /> Expenses
+        </button>
       </div>
-      <h1>Settle up</h1>
+      <div className="screen-head">
+        <span className="eyebrow">Settle</span>
+        <h1>Settle up</h1>
+      </div>
       {error && <div className="err">{error}</div>}
 
       <h2>Balances</h2>
-      <div className="card">
+      <div className="card" style={{ gap: 0, padding: "6px 16px" }}>
         {shares.map((s) => {
           const bal = balances.get(s.member_id) ?? 0;
+          const width = `${(Math.abs(bal) / maxAbs) * 50}%`;
           return (
-            <div className="settlerow" key={s.member_id}>
-              <div className="avatar">{nameOf(s.member_id)[0]?.toUpperCase()}</div>
+            <div className="bal-row" key={s.member_id}>
+              {person(s.member_id)}
               <div className="grow">
                 <b>{nameOf(s.member_id)}</b>
                 <div className="muted">
                   had {formatMoney(s.consumed_cents)} · paid {formatMoney(s.paid_cents)}
                 </div>
+                <div className="bal-bar">
+                  {bal !== 0 && <i className={bal > 0 ? "pos" : "neg"} style={{ width }} />}
+                </div>
               </div>
-              <b style={{ color: bal < 0 ? "var(--warn)" : bal > 0 ? "var(--accent)" : "var(--muted)" }}>
+              <b className={`bal-amt ${bal > 0 ? "pos" : bal < 0 ? "neg" : "even"}`}>
                 {bal === 0 ? "even" : bal > 0 ? `+${formatMoney(bal)}` : formatMoney(bal)}
               </b>
             </div>
@@ -144,36 +161,42 @@ export default function Balances({
 
       <h2>Payments</h2>
       {remaining.length === 0 && (
-        <div className="ok">Everyone's settled up. 🎉</div>
+        <div className="card glow celebrate">
+          <div className="big">🎉</div>
+          <b>Everyone's settled up.</b>
+        </div>
       )}
       {remaining.map((s, i) => {
         const note = `TripSplit: ${data.trip.name} — ${nameOf(s.from_member_id)} to ${nameOf(s.to_member_id)} via tripsplit.us`;
         return (
           <div className="card" key={i}>
-            <div className="row between">
-              <div>
-                <b>{nameOf(s.from_member_id)}</b> → <b>{nameOf(s.to_member_id)}</b>
+            <div className="pay-flow">
+              <div className="pay-who">
+                {person(s.from_member_id)}
+                <b>{nameOf(s.from_member_id)}</b>
               </div>
-              <div className="amt-big" style={{ fontSize: 22 }}>{formatMoney(s.amount_cents)}</div>
+              <div className="pay-mid">
+                <div className="amt-big">{formatMoney(s.amount_cents)}</div>
+                <svg className="arrow" viewBox="0 0 92 12" fill="none" aria-hidden="true">
+                  <path d="M2 6h84" stroke="currentColor" strokeWidth="2" strokeDasharray="4 5" strokeLinecap="round" />
+                  <path d="m82 1.5 6 4.5-6 4.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
+              <div className="pay-who">
+                {person(s.to_member_id)}
+                <b>{nameOf(s.to_member_id)}</b>
+              </div>
             </div>
-            <div className="row">
-              <a
-                className="btn small grow"
-                style={{ textDecoration: "none" }}
-                href={venmoPayLink(centsToDollars(s.amount_cents), note)}
-              >
+            <div className="btnrow">
+              <a className="btn small" href={venmoPayLink(centsToDollars(s.amount_cents), note)}>
                 Pay in Venmo
               </a>
-              <a
-                className="btn secondary small grow"
-                style={{ textDecoration: "none" }}
-                href={venmoChargeLink(centsToDollars(s.amount_cents), note)}
-              >
+              <a className="btn secondary small" href={venmoChargeLink(centsToDollars(s.amount_cents), note)}>
                 Request
               </a>
             </div>
-            <button className="btn ghost small" onClick={() => markPaid(s.from_member_id, s.to_member_id, s.amount_cents)}>
-              ✓ Mark as paid
+            <button className="btn ghost small" style={{ width: "100%" }} onClick={() => markPaid(s.from_member_id, s.to_member_id, s.amount_cents)}>
+              <Icon name="check" size={16} /> Mark as paid
             </button>
           </div>
         );
@@ -184,19 +207,23 @@ export default function Balances({
           <h2>Awaiting confirmation</h2>
           {pendingPayments.map((p) => (
             <div className="card" key={p.id}>
-              <div className="row between">
-                <div>
+              <div className="row">
+                {person(p.from_member_id, true)}
+                <Icon name="arrowRight" size={16} />
+                {person(p.to_member_id, true)}
+                <div className="grow">
                   <b>{nameOf(p.from_member_id)}</b> → <b>{nameOf(p.to_member_id)}</b>
                   <div className="muted">{formatMoney(p.amount_cents)} · waiting on {nameOf(p.to_member_id)}</div>
                 </div>
-                <button
-                  className="btn small"
-                  disabled={confirming === p.id}
-                  onClick={() => confirm(p.id)}
-                >
-                  {nameOf(p.to_member_id)}: got it ✓
-                </button>
               </div>
+              <button
+                className="btn small"
+                style={{ width: "100%" }}
+                disabled={confirming === p.id}
+                onClick={() => confirm(p.id)}
+              >
+                {nameOf(p.to_member_id)}: got it ✓
+              </button>
             </div>
           ))}
         </>
@@ -205,9 +232,9 @@ export default function Balances({
       {confirmedPayments.length > 0 && (
         <>
           <h2>Done</h2>
-          <div className="card">
+          <div className="card" style={{ gap: 4 }}>
             {confirmedPayments.map((p) => (
-              <div className="row between" key={p.id}>
+              <div className="done-row" key={p.id}>
                 <span>{nameOf(p.from_member_id)} → {nameOf(p.to_member_id)}</span>
                 <b>{formatMoney(p.amount_cents)} ✓</b>
               </div>
@@ -217,39 +244,39 @@ export default function Balances({
       )}
 
       <h2>All expenses</h2>
-      {data.expenses.map((e) => (
-        <div className="card" key={e.id}>
-          <div className="row between">
-            <div>
-              <b>{e.name}</b>
-              <div className="muted">{formatMoney(e.amount_cents)}</div>
-            </div>
-            <button className="btn ghost small" onClick={() => removeExpense(e.id, e.name)}>
-              Delete
-            </button>
-          </div>
-          {(() => {
-            const u = unclaimedByExpense.get(e.id);
-            if (!u) return null;
-            return (
-              <div className="muted" style={{ marginTop: 6 }}>
-                {u.count} of {u.total} items unclaimed · {formatMoney(u.cents)} splitting evenly for now
+      <div className="card list">
+        {data.expenses.map((e) => {
+          const u = unclaimedByExpense.get(e.id);
+          return (
+            <div className="ex-row" key={e.id} style={{ alignItems: "flex-start" }}>
+              <div className="grow">
+                <b>{e.name}</b>
+                <div className="muted">{formatMoney(e.amount_cents)}</div>
+                {u && (
+                  <div className="muted" style={{ marginTop: 4, color: "var(--warn)" }}>
+                    {u.count} of {u.total} items unclaimed · {formatMoney(u.cents)} splitting evenly for now
+                  </div>
+                )}
               </div>
-            );
-          })()}
-        </div>
-      ))}
+              <button className="btn ghost small" onClick={() => removeExpense(e.id, e.name)}>
+                <Icon name="trash" size={15} /> Delete
+              </button>
+            </div>
+          );
+        })}
+      </div>
 
-      <div className="card center" style={{ marginTop: 24 }}>
-        <div style={{ fontSize: 28 }}>🧳</div>
-        <b>Got another trip coming up?</b>
-        <div className="muted" style={{ margin: "6px 0 12px" }}>
+      <section className="stage celebrate" style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 8 }}>
+        <div className="big">🧳</div>
+        <h2>Got another trip coming up?</h2>
+        <div className="muted" style={{ marginBottom: 6 }}>
           Start your own TripSplit — free, no signup.
         </div>
-        <button className="btn" onClick={onStartOwn}>
+        <button className="btn white" style={{ width: "auto" }} onClick={onStartOwn}>
           Start a trip
+          <span className="go"><Icon name="arrowRight" /></span>
         </button>
-      </div>
+      </section>
     </>
   );
 }

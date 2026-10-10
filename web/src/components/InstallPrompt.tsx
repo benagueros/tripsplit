@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Icon from "./Icon";
 
 // beforeinstallprompt is a real browser event but isn't in TS's DOM lib.
 interface BeforeInstallPromptEvent extends Event {
@@ -57,19 +58,20 @@ export default function InstallPrompt() {
 
   return (
     <div className="card">
-      <div className="row between">
-        <div>
-          <b>📲 Install TripSplit</b>
+      <div className="row">
+        <span className="tile"><Icon name="download" size={22} /></span>
+        <div className="grow">
+          <b>Install TripSplit</b>
           <div className="muted">Add it to your home screen for one-tap access on the next trip.</div>
         </div>
-        <div className="row">
-          <button className="btn ghost small" onClick={dismiss}>
-            Not now
-          </button>
-          <button className="btn small" onClick={install}>
-            Install
-          </button>
-        </div>
+      </div>
+      <div className="btnrow">
+        <button className="btn ghost small" onClick={dismiss}>
+          Not now
+        </button>
+        <button className="btn small" onClick={install}>
+          Install
+        </button>
       </div>
     </div>
   );

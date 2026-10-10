@@ -22,7 +22,8 @@ export default class ErrorBoundary extends React.Component<
     if (this.state.error) {
       return (
         <div className="screen">
-          <div className="card center">
+          <div className="card center" style={{ alignItems: "center", marginTop: 40 }}>
+            <div style={{ fontSize: 40, lineHeight: 1 }}>🫠</div>
             <h1>Something went wrong</h1>
             <p className="muted">
               This trip has data the app can't display right now. Try editing

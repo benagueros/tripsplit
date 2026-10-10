@@ -1,4 +1,6 @@
 import { useState } from "react";
+import Icon from "../components/Icon";
+import { toneOf } from "../components/Person";
 
 export default function CreateTrip({
   onBack,
@@ -40,7 +42,10 @@ export default function CreateTrip({
 
   return (
     <>
-      <h1>New trip</h1>
+      <div className="screen-head">
+        <span className="eyebrow">Start a trip</span>
+        <h1>New trip</h1>
+      </div>
       {error && <div className="err">{error}</div>}
       <label className="field">
         Trip name
@@ -51,9 +56,12 @@ export default function CreateTrip({
           onChange={(e) => setName(e.target.value)}
         />
       </label>
-      <h2>Who's going?</h2>
+      <h2 style={{ marginTop: 8 }}>Who's going?</h2>
       {names.map((n, i) => (
-        <div className="row" key={i}>
+        <div className="person-input" key={i}>
+          <span className={`avatar ${n.trim() ? toneOf(i) : "empty"}`} aria-hidden="true">
+            {n.trim()[0]?.toUpperCase() ?? i + 1}
+          </span>
           <input
             type="text"
             placeholder={`Person ${i + 1}`}
@@ -63,20 +71,20 @@ export default function CreateTrip({
           />
           {names.length > 2 && (
             <button
-              className="btn ghost small"
+              className="icon-btn"
               onClick={() => setNames(names.filter((_, j) => j !== i))}
               aria-label="Remove person"
             >
-              ✕
+              <Icon name="x" size={18} />
             </button>
           )}
         </div>
       ))}
-      <button className="btn ghost" onClick={() => setNames([...names, ""])}>
-        + Add person
+      <button className="btn dashed" onClick={() => setNames([...names, ""])}>
+        <Icon name="plus" size={18} /> Add person
       </button>
-      <button className="btn" disabled={saving} onClick={submit}>
-        {saving ? "Creating…" : "Create trip"}
+      <button className="btn" disabled={saving} onClick={submit} style={{ marginTop: 6 }}>
+        {saving ? "Creating…" : <>Create trip <Icon name="arrowRight" size={18} /></>}
       </button>
       <button className="btn ghost" onClick={onBack}>Back</button>
     </>

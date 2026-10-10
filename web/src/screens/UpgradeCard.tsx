@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { functionsUrl, getTripJwt } from "../lib/supabase";
 import { startPlusCheckout } from "../lib/plus";
+import Icon from "../components/Icon";
 
 type SubState = {
   cancel_at_period_end: boolean;
@@ -46,10 +47,11 @@ export default function UpgradeCard({ tier }: { tier: string }) {
     };
 
     return (
-      <div className="card">
-        <div className="row between">
-          <div>
-            <b>✨ TripSplit Plus</b>
+      <div className="card glow">
+        <div className="row">
+          <span className="tile"><Icon name="sparkle" size={22} /></span>
+          <div className="grow">
+            <b>TripSplit Plus</b>
             <div className="muted">
               200 receipt scans/month · $2.99/mo. Free tier includes 15.
             </div>
@@ -86,10 +88,11 @@ export default function UpgradeCard({ tier }: { tier: string }) {
     : null;
 
   return (
-    <div className="card">
-      <div className="row between">
-        <div>
-          <b>✨ TripSplit Plus</b>
+    <div className="card glow">
+      <div className="row">
+        <span className="tile"><Icon name="sparkle" size={22} /></span>
+        <div className="grow">
+          <b>TripSplit Plus</b>
           <div className="muted">
             {sub?.cancel_at_period_end
               ? ends

@@ -2,6 +2,8 @@ import { useState } from "react";
 import { dollarsToCents, formatMoney, splitCentsEvenly } from "../lib/money";
 import { savePerDayExpense } from "../lib/store";
 import type { Member } from "../lib/types";
+import Icon from "../components/Icon";
+import { PersonChip } from "../components/Person";
 
 type Preset = "lodging" | "rental";
 
@@ -24,7 +26,7 @@ export default function SplitByDay({
   const [preset, setPreset] = useState<Preset>("lodging");
   const [name, setName] = useState("");
   const [totalStr, setTotalStr] = useState("");
-  const [paidBy, setPaidBy] = useState(members[0]?.id ?? "");
+  const [paidByChoice, setPaidBy] = useState(members[0]?.id ?? "");
   // Kept as raw text so the field can be cleared and retyped freely —
   // coercing "" to a number mid-typing is what produced the "13" bug.
   const [unitCountStr, setUnitCountStr] = useState("2");
@@ -33,6 +35,12 @@ export default function SplitByDay({
   const [saving, setSaving] = useState(false);
 
   const cfg = PRESETS[preset];
+
+  // The form can stay open (hidden) while people are removed from the trip,
+  // so drop anyone who is gone before counting, showing, or saving.
+  const memberIds = new Set(members.map((m) => m.id));
+  const liveUnits = units.map((u) => u.filter((id) => memberIds.has(id)));
+  const paidBy = memberIds.has(paidByChoice) ? paidByChoice : members[0]?.id ?? "";
 
   // The effective count: clamped when the text parses, otherwise the
   // actual number of rows (so clearing the field doesn't collapse them).
@@ -88,7 +96,7 @@ export default function SplitByDay({
       setError("Enter the total cost.");
       return;
     }
-    const emptyIdx = units.findIndex((u) => u.length === 0);
+    const emptyIdx = liveUnits.findIndex((u) => u.length === 0);
     if (emptyIdx >= 0) {
       setError(
         `${cfg.unitLabel[0].toUpperCase() + cfg.unitLabel.slice(1)} ${emptyIdx + 1} has nobody in it — ` +
@@ -105,9 +113,9 @@ export default function SplitByDay({
         paidBy,
         unitLabel: cfg.unitLabel,
         preset,
-        units: units.map((memberIds, i) => ({
+        units: liveUnits.map((ids, i) => ({
           label: `${cfg.unitLabel[0].toUpperCase() + cfg.unitLabel.slice(1)} ${i + 1}`,
-          memberIds,
+          memberIds: ids,
         })),
       });
       onDone();
@@ -125,13 +133,17 @@ export default function SplitByDay({
 
   return (
     <>
-      <h1>Split by {preset === "lodging" ? "night" : "day"}</h1>
-      <p className="muted">{cfg.hint}</p>
+      <div className="screen-head">
+        <span className="eyebrow">By day</span>
+        <h1>Split by {preset === "lodging" ? "night" : "day"}</h1>
+        <p className="muted">{cfg.hint}</p>
+      </div>
       {error && <div className="err">{error}</div>}
-      <div className="tabs">
+      <div className="seg" role="group" aria-label="Kind">
         {(["lodging", "rental"] as Preset[]).map((p) => (
-          <button key={p} className={`chip ${preset === p ? "on" : ""}`} onClick={() => changePreset(p)}>
-            {p === "lodging" ? "🛏️ Lodging" : "🚗 Rental car"}
+          <button key={p} className={preset === p ? "on" : ""} aria-pressed={preset === p} onClick={() => changePreset(p)}>
+            <Icon name={p === "lodging" ? "bed" : "car"} size={18} />
+            {p === "lodging" ? "Lodging" : "Rental car"}
           </button>
         ))}
       </div>
@@ -144,14 +156,17 @@ export default function SplitByDay({
           onChange={(e) => setName(e.target.value)}
         />
       </label>
-      <div className="row">
-        <label className="field grow">
-          Total cost ($)
+      <label className="field">
+        Total cost ($)
+        <div className="money">
+          <span>$</span>
           <input
             type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00"
             value={totalStr} onChange={(e) => setTotalStr(e.target.value)}
           />
-        </label>
+        </div>
+      </label>
+      <div className="row" style={{ alignItems: "flex-end" }}>
         <label className="field grow">
           Paid by
           <select value={paidBy} onChange={(e) => setPaidBy(e.target.value)}>
@@ -160,7 +175,7 @@ export default function SplitByDay({
             ))}
           </select>
         </label>
-        <label className="field" style={{ width: 90 }}>
+        <label className="field" style={{ width: 100, textTransform: "capitalize" }}>
           {cfg.unitLabelPlural}
           <input
             type="number" min="1" max="31" value={unitCountStr}
@@ -173,28 +188,28 @@ export default function SplitByDay({
         </label>
       </div>
       {preview.length > 0 && (
-        <p className="muted center">
+        <p className="per-unit">
           {formatMoney(preview[0])} per {cfg.unitLabel} × {unitCount}
         </p>
       )}
       <div className="unitgrid">
-        {units.map((memberIds, i) => (
-          <div className="unit" key={i}>
+        {liveUnits.map((ids, i) => (
+          <div className="card unit" key={i}>
             <div className="ulabel">
               {cfg.unitLabel[0].toUpperCase() + cfg.unitLabel.slice(1)} {i + 1}
               {preview[i] != null && (
-                <span className="muted"> · {formatMoney(preview[i])}{memberIds.length > 0 && ` ÷ ${memberIds.length}`}</span>
+                <span>{formatMoney(preview[i])}{ids.length > 0 && ` ÷ ${ids.length}`}</span>
               )}
             </div>
             <div className="chiprow">
-              {members.map((m) => (
-                <button
+              {members.map((m, j) => (
+                <PersonChip
                   key={m.id}
-                  className={`chip ${memberIds.includes(m.id) ? "on" : ""}`}
+                  name={m.name}
+                  index={j}
+                  on={ids.includes(m.id)}
                   onClick={() => toggle(i, m.id)}
-                >
-                  {m.name}
-                </button>
+                />
               ))}
             </div>
           </div>
