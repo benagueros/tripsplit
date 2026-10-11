@@ -51,6 +51,9 @@ export default function SimpleExpense({
         return { member_id: m.id, amount_cents: dollarsToCents(v) };
       });
       const sum = shares.reduce((a, s) => a + s.amount_cents, 0);
+      if (shares.some((s) => s.amount_cents < 0)) {
+        throw new Error("Custom amounts can't be negative.");
+      }
       if (sum !== totalCents) {
         throw new Error(
           `Custom amounts add to ${formatMoney(sum)} but the total is ${formatMoney(totalCents)}.`
@@ -61,8 +64,8 @@ export default function SimpleExpense({
     // percent
     const pcts = people.map((m) => {
       const p = parseFloat(percent[m.id] || "0");
-      if (!Number.isFinite(p)) {
-        throw new Error("Percents must be numbers that total 100%.");
+      if (!Number.isFinite(p) || p < 0) {
+        throw new Error("Percents must be numbers 0–100 that total 100%.");
       }
       return p;
     });

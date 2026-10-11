@@ -193,6 +193,9 @@ Deno.serve(async (req) => {
       polar_subscription_id: subscriptionId || null,
       polar_customer_id: customerId || null,
       polar_last_event_ts: new Date(eventTs * 1000).toISOString(),
+      // Any tier change resolves the in-flight checkout the pending marker
+      // was guarding (paid, canceled, or failed-renewal downgrade).
+      polar_checkout_pending_at: null,
     })
     .eq("id", tripId);
 

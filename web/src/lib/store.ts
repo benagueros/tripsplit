@@ -129,6 +129,7 @@ export function useTripData(tripId: string | null) {
         .on("postgres_changes", { event: "*", schema: "public", table: "expenses" }, () => reload())
         .on("postgres_changes", { event: "*", schema: "public", table: "payments" }, () => reload())
         .on("postgres_changes", { event: "*", schema: "public", table: "item_claims" }, () => reload())
+        .on("postgres_changes", { event: "*", schema: "public", table: "members" }, () => reload())
         .subscribe();
     } catch {
       /* realtime is best-effort; manual refresh still works */
@@ -162,7 +163,11 @@ export async function saveReceiptExpense(args: {
       price_cents: it.price_cents, sort: i,
     }))
   ).select();
-  if (itemErr) throw itemErr;
+  if (itemErr) {
+    // Don't leave an orphaned expense row behind on failure.
+    await db.from("expenses").delete().eq("id", expense.id);
+    throw itemErr;
+  }
 
   // Map client temp ids -> real ids via the sort index assigned at insert.
   // Claims are looked up by each item's OWN tempId — never by position —
@@ -180,20 +185,14 @@ export async function saveReceiptExpense(args: {
   });
   if (rows.length > 0) {
     const { error: claimErr } = await db.from("item_claims").insert(rows);
-    if (claimErr) throw claimErr;
+    if (claimErr) {
+      // Deleting the expense cascades to its items; don't leave a
+      // claim-less receipt behind on failure.
+      await db.from("expenses").delete().eq("id", expense.id);
+      throw claimErr;
+    }
   }
   return expense.id;
-}
-
-export async function setItemClaims(itemId: string, claims: { member_id: string; qty: number }[]) {
-  const db = authedClient();
-  await db.from("item_claims").delete().eq("receipt_item_id", itemId);
-  if (claims.length > 0) {
-    const { error } = await db.from("item_claims").insert(
-      claims.map((c) => ({ receipt_item_id: itemId, member_id: c.member_id, qty: c.qty }))
-    );
-    if (error) throw error;
-  }
 }
 
 /** Load a receipt expense with its items and claims for editing. */
@@ -251,9 +250,14 @@ export async function updateReceiptExpense(args: {
   }).eq("id", args.expenseId);
   if (expErr) throw expErr;
 
-  // Deleting items cascades to their claims.
-  const { error: delErr } = await db.from("receipt_items").delete().eq("expense_id", args.expenseId);
-  if (delErr) throw delErr;
+  // Insert the NEW items + claims BEFORE deleting the old ones: a failure
+  // mid-way leaves the receipt's existing data intact instead of destroying
+  // it (the old delete-first order wiped items/claims permanently when the
+  // re-insert failed, e.g. on a constraint violation).
+  const { data: oldItems, error: oldErr } = await db.from("receipt_items")
+    .select("id").eq("expense_id", args.expenseId);
+  if (oldErr) throw oldErr;
+  const oldIds = ((oldItems ?? []) as { id: string }[]).map((r) => r.id);
 
   const { data: items, error: itemErr } = await db.from("receipt_items").insert(
     args.items.map((it, i) => ({
@@ -263,6 +267,7 @@ export async function updateReceiptExpense(args: {
   ).select();
   if (itemErr) throw itemErr;
 
+  const newIds = ((items ?? []) as { id: string }[]).map((r) => r.id);
   const rows: { receipt_item_id: string; member_id: string; qty: number }[] = [];
   const realIdBySort = new Map(
     ((items ?? []) as { id: string; sort: number }[]).map((r) => [r.sort, r.id])
@@ -276,7 +281,18 @@ export async function updateReceiptExpense(args: {
   });
   if (rows.length > 0) {
     const { error: claimErr } = await db.from("item_claims").insert(rows);
-    if (claimErr) throw claimErr;
+    if (claimErr) {
+      // Best-effort rollback of what we just added; the old items are untouched.
+      if (newIds.length > 0) await db.from("receipt_items").delete().in("id", newIds);
+      throw claimErr;
+    }
+  }
+
+  // Old items (and their claims via cascade) go away only after the new
+  // data is safely stored.
+  if (oldIds.length > 0) {
+    const { error: delErr } = await db.from("receipt_items").delete().in("id", oldIds);
+    if (delErr) throw delErr;
   }
 }
 
@@ -298,7 +314,10 @@ export async function saveSimpleExpense(args: {
       expense_id: expense.id, member_id: s.member_id, amount_cents: s.amount_cents,
     }))
   );
-  if (shareErr) throw shareErr;
+  if (shareErr) {
+    await db.from("expenses").delete().eq("id", expense.id);
+    throw shareErr;
+  }
   return expense.id;
 }
 
@@ -326,7 +345,10 @@ export async function savePerDayExpense(args: {
   const { data: unitRows, error: unitErr } = await db.from("per_day_units").insert(
     args.units.map((u, i) => ({ expense_id: expense.id, unit_index: i, label: u.label }))
   ).select();
-  if (unitErr) throw unitErr;
+  if (unitErr) {
+    await db.from("expenses").delete().eq("id", expense.id);
+    throw unitErr;
+  }
 
   const rows: { unit_id: string; member_id: string }[] = [];
   (unitRows ?? []).forEach((real: { id: string; unit_index: number }) => {
@@ -336,7 +358,11 @@ export async function savePerDayExpense(args: {
   });
   if (rows.length > 0) {
     const { error: partErr } = await db.from("per_day_participants").insert(rows);
-    if (partErr) throw partErr;
+    if (partErr) {
+      // Cascades to units; don't leave a participant-less expense behind.
+      await db.from("expenses").delete().eq("id", expense.id);
+      throw partErr;
+    }
   }
   return expense.id;
 }

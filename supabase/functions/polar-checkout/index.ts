@@ -84,6 +84,21 @@ Deno.serve(async (req) => {
   if (!trip) return json({ error: "Trip not found." }, 404);
   if (trip.tier === "paid") return json({ error: "Trip already on Plus." }, 400);
 
+  // Atomically claim the checkout slot: a double-submit (or a second member
+  // upgrading mid-checkout) must not create two Polar subscriptions for one
+  // trip. The webhook clears the marker on any tier change; abandoned
+  // checkouts expire after 30 minutes so a retry is always possible.
+  const slotCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  const { data: claimed } = await supabase
+    .from("trips")
+    .update({ polar_checkout_pending_at: new Date().toISOString() })
+    .eq("id", tripId)
+    .or(`polar_checkout_pending_at.is.null,polar_checkout_pending_at.lt.${slotCutoff}`)
+    .select("id");
+  if (!claimed || claimed.length === 0) {
+    return json({ error: "A checkout is already in progress for this trip — finish it or wait a few minutes." }, 400);
+  }
+
   // Create the Polar checkout. Metadata ties the subscription back to this trip.
   const res = await fetch("https://api.polar.sh/v1/checkouts/", {
     method: "POST",
@@ -102,6 +117,8 @@ Deno.serve(async (req) => {
   if (!res.ok) {
     const err = await res.text();
     console.error("polar-checkout: Polar API error", res.status, err.slice(0, 500));
+    // Release the slot: no checkout was created.
+    await supabase.from("trips").update({ polar_checkout_pending_at: null }).eq("id", tripId);
     return json({ error: "Could not start checkout. Try again." }, 502);
   }
 

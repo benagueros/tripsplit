@@ -101,8 +101,13 @@ Deno.serve(async (req) => {
       )];
       if (!name?.trim()) return json({ error: "Trip name is required." }, 400);
       if (clean.length < 2) return json({ error: "Add at least two people." }, 400);
+      if (clean.length > 50) return json({ error: "Keep it to 50 people or fewer per trip." }, 400);
       if (clean.some((n) => n.length > 40)) {
         return json({ error: "Keep names to 40 characters or less." }, 400);
+      }
+      const tripName = name.trim();
+      if (tripName.length > 100) {
+        return json({ error: "Keep trip names to 100 characters or less." }, 400);
       }
       const lowered = clean.map((n) => n.toLowerCase());
       if (new Set(lowered).size !== lowered.length) {
@@ -126,7 +131,7 @@ Deno.serve(async (req) => {
 
       const token = randomToken();
       const { data: trip, error: tripErr } = await supabase.from("trips")
-        .insert({ name: name.trim(), token, code })
+        .insert({ name: tripName, token, code })
         .select().single();
       if (tripErr) throw tripErr;
 

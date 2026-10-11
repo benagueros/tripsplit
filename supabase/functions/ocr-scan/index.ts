@@ -217,6 +217,13 @@ Deno.serve(async (req) => {
     monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
     const quota = QUOTAS[trip.tier] ?? QUOTAS.free;
 
+    // Fast-path size guard: don't buffer a huge body just to reject it below.
+    // (base64 inflates ~33%, so 10MB on the wire ≈ 7.5MB decoded.)
+    const contentLength = parseInt(req.headers.get("content-length") ?? "", 10);
+    if (Number.isFinite(contentLength) && contentLength > 10 * 1024 * 1024) {
+      return json({ error: "Image is too large — please use a smaller photo." }, 413);
+    }
+
     const { image_base64, mime_type } = await req.json() as {
       image_base64: string; mime_type: string;
     };
