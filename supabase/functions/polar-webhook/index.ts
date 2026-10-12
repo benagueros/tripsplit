@@ -156,7 +156,7 @@ Deno.serve(async (req) => {
   const eventTs = Number(timestamp); // validated finite by verifySignature
   const { data: trip, error: tripErr } = await supabase
     .from("trips")
-    .select("polar_subscription_id, polar_last_event_ts")
+    .select("tier, polar_subscription_id, polar_last_event_ts")
     .eq("id", tripId)
     .single();
   if (tripErr) {
@@ -193,9 +193,13 @@ Deno.serve(async (req) => {
       polar_subscription_id: subscriptionId || null,
       polar_customer_id: customerId || null,
       polar_last_event_ts: new Date(eventTs * 1000).toISOString(),
-      // Any tier change resolves the in-flight checkout the pending marker
-      // was guarding (paid, canceled, or failed-renewal downgrade).
-      polar_checkout_pending_at: null,
+      // Clear the in-flight checkout marker only when this event resolves a
+      // checkout: it changes the tier, or it's for the stored subscription.
+      // A late event for a *different* subscription must not reopen the
+      // double-subscription window the marker was built to close.
+      ...((tier !== trip?.tier || (trip?.polar_subscription_id ?? null) === subscriptionId)
+        ? { polar_checkout_pending_at: null }
+        : {}),
     })
     .eq("id", tripId);
 

@@ -93,6 +93,9 @@ Deno.serve(async (req) => {
     .from("trips")
     .update({ polar_checkout_pending_at: new Date().toISOString() })
     .eq("id", tripId)
+    // Re-check the tier in the same statement: a webhook may have upgraded
+    // the trip between our SELECT above and this UPDATE.
+    .neq("tier", "paid")
     .or(`polar_checkout_pending_at.is.null,polar_checkout_pending_at.lt.${slotCutoff}`)
     .select("id");
   if (!claimed || claimed.length === 0) {

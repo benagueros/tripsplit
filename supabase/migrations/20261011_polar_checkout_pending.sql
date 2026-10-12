@@ -10,9 +10,14 @@ alter table trips
 -- Backfill: free-tier trips may still carry a dead canceled subscription id
 -- from before; with the pending marker as the guard, a free trip must not
 -- point at any subscription.
+-- NOTE: the billing trigger below (and the previous version) rejects
+-- polar_subscription_id changes from this session, so the trigger is
+-- disabled for the backfill and re-enabled immediately after.
+alter table trips disable trigger trips_protect_billing;
 update trips
   set polar_subscription_id = null
   where tier = 'free' and polar_subscription_id is not null;
+alter table trips enable trigger trips_protect_billing;
 
 -- The new column is billing state: only the service-role webhook/checkout
 -- functions may change it (same rule as tier / polar_subscription_id).
