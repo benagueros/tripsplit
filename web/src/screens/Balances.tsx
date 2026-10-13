@@ -6,7 +6,7 @@ import {
   simplifyDebts,
 } from "../lib/settle";
 import { confirmPayment, deleteExpense, recordPayment, type TripData } from "../lib/store";
-import { venmoChargeLink, venmoPayLink } from "../lib/venmo";
+import { venmoChargeLink, venmoPayLink, venmoPaymentDetails } from "../lib/venmo";
 import Icon from "../components/Icon";
 import { Avatar } from "../components/Person";
 
@@ -23,6 +23,20 @@ export default function Balances({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  // Copy fallback for desktop: venmo:// deep links do nothing without the
+  // Venmo app, so let the payer copy the details and paste them into
+  // Venmo's web app instead.
+  const copyDetails = async (key: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey((cur) => (cur === key ? null : cur)), 2000);
+    } catch {
+      setError("Couldn't copy — copy the details manually.");
+    }
+  };
 
   const nameOf = (id: string) =>
     data.members.find((m) => m.id === id)?.name ?? "?";
@@ -168,6 +182,7 @@ export default function Balances({
       )}
       {remaining.map((s, i) => {
         const note = `TripSplit: ${data.trip.name} — ${nameOf(s.from_member_id)} to ${nameOf(s.to_member_id)} via tripsplit.us`;
+        const copyKey = `${s.from_member_id}-${s.to_member_id}`;
         return (
           <div className="card" key={i}>
             <div className="pay-flow">
@@ -194,6 +209,17 @@ export default function Balances({
               <a className="btn secondary small" href={venmoChargeLink(centsToDollars(s.amount_cents), note)}>
                 Request
               </a>
+              <button
+                className="btn secondary small"
+                onClick={() =>
+                  copyDetails(
+                    copyKey,
+                    venmoPaymentDetails(nameOf(s.to_member_id), centsToDollars(s.amount_cents), note)
+                  )
+                }
+              >
+                {copiedKey === copyKey ? "Copied!" : "Copy details"}
+              </button>
             </div>
             <button className="btn ghost small" style={{ width: "100%" }} onClick={() => markPaid(s.from_member_id, s.to_member_id, s.amount_cents)}>
               <Icon name="check" size={16} /> Mark as paid
