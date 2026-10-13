@@ -89,9 +89,10 @@ Deno.serve(async (req) => {
   // trip. The webhook clears the marker on any tier change; abandoned
   // checkouts expire after 30 minutes so a retry is always possible.
   const slotCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  const claimedAt = new Date().toISOString();
   const { data: claimed } = await supabase
     .from("trips")
-    .update({ polar_checkout_pending_at: new Date().toISOString() })
+    .update({ polar_checkout_pending_at: claimedAt })
     .eq("id", tripId)
     // Re-check the tier in the same statement: a webhook may have upgraded
     // the trip between our SELECT above and this UPDATE.
@@ -101,6 +102,14 @@ Deno.serve(async (req) => {
   if (!claimed || claimed.length === 0) {
     return json({ error: "A checkout is already in progress for this trip — finish it or wait a few minutes." }, 400);
   }
+
+  // Release only OUR claim (matched on the timestamp we set): a later
+  // claim must never be cleared by an earlier request's failure path.
+  const releaseSlot = () =>
+    supabase.from("trips")
+      .update({ polar_checkout_pending_at: null })
+      .eq("id", tripId)
+      .eq("polar_checkout_pending_at", claimedAt);
 
   // Create the Polar checkout. Metadata ties the subscription back to this trip.
   const res = await fetch("https://api.polar.sh/v1/checkouts/", {
@@ -121,12 +130,16 @@ Deno.serve(async (req) => {
     const err = await res.text();
     console.error("polar-checkout: Polar API error", res.status, err.slice(0, 500));
     // Release the slot: no checkout was created.
-    await supabase.from("trips").update({ polar_checkout_pending_at: null }).eq("id", tripId);
+    await releaseSlot();
     return json({ error: "Could not start checkout. Try again." }, 502);
   }
 
   const checkout = await res.json() as { url?: string; id?: string };
-  if (!checkout.url) return json({ error: "Checkout URL missing." }, 502);
+  if (!checkout.url) {
+    // Polar answered without a URL: no usable checkout exists, free the slot.
+    await releaseSlot();
+    return json({ error: "Checkout URL missing." }, 502);
+  }
 
   return json({ url: checkout.url });
 });
