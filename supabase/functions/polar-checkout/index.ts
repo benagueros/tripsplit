@@ -112,29 +112,40 @@ Deno.serve(async (req) => {
       .eq("polar_checkout_pending_at", claimedAt);
 
   // Create the Polar checkout. Metadata ties the subscription back to this trip.
-  const res = await fetch("https://api.polar.sh/v1/checkouts/", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${POLAR_API_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      products: [POLAR_PRODUCT_ID],
-      metadata: { trip_id: tripId },
-      success_url: `${APP_URL}/#/t/${trip.token}?upgraded=1`,
-      allow_discount_codes: true,
-    }),
-  });
+  // A network throw (or an unparseable body) must release the slot too —
+  // otherwise a transient blip strands it for 30 minutes. The success path
+  // keeps the slot; the webhook clears it when the tier changes.
+  let checkout: { url?: string; id?: string };
+  try {
+    const res = await fetch("https://api.polar.sh/v1/checkouts/", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${POLAR_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        products: [POLAR_PRODUCT_ID],
+        metadata: { trip_id: tripId },
+        success_url: `${APP_URL}/#/t/${trip.token}?upgraded=1`,
+        allow_discount_codes: true,
+      }),
+    });
 
-  if (!res.ok) {
-    const err = await res.text();
-    console.error("polar-checkout: Polar API error", res.status, err.slice(0, 500));
-    // Release the slot: no checkout was created.
+    if (!res.ok) {
+      const err = await res.text();
+      console.error("polar-checkout: Polar API error", res.status, err.slice(0, 500));
+      // Release the slot: no checkout was created.
+      await releaseSlot();
+      return json({ error: "Could not start checkout. Try again." }, 502);
+    }
+
+    checkout = await res.json() as { url?: string; id?: string };
+  } catch (e) {
+    console.error("polar-checkout: Polar request failed", e instanceof Error ? e.message : e);
     await releaseSlot();
     return json({ error: "Could not start checkout. Try again." }, 502);
   }
 
-  const checkout = await res.json() as { url?: string; id?: string };
   if (!checkout.url) {
     // Polar answered without a URL: no usable checkout exists, free the slot.
     await releaseSlot();

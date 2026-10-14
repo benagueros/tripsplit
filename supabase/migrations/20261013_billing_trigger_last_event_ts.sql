@@ -12,6 +12,13 @@
 -- disable/enable pair that a mid-script failure could split.
 alter table trips enable trigger trips_protect_billing;
 
+-- CANONICAL GUARD LIST (Oct 13, 2026): protect_trip_billing_columns() must
+-- guard ALL of: tier, token, polar_subscription_id, polar_customer_id,
+-- polar_checkout_pending_at, polar_last_event_ts.
+-- Rule: any future migration redefining this function must start from THIS
+-- file's version (never an older copy) and update this list when adding a
+-- guard. The Oct 11 migration copied the Oct 1 version and silently dropped
+-- the polar_last_event_ts guard — that's how this fix file came to exist.
 create or replace function protect_trip_billing_columns()
 returns trigger
 language plpgsql

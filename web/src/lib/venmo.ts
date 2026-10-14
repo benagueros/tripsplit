@@ -33,6 +33,8 @@ export function venmoWebLink(): string {
 // Plain-text payment details for the copy fallback: venmo:// links only
 // work where the Venmo app is installed, so desktop users paste this into
 // Venmo's web app (or a message) instead of tapping a dead deep link.
+// Single line: Venmo's note field is single-line, so a pasted newline may
+// strip the trip-identifying note.
 export function venmoPaymentDetails(toName: string, amountDollars: string, note: string): string {
-  return `Pay ${toName} $${amountDollars}\n${note}`;
+  return `Pay ${toName} $${amountDollars} — ${note}`;
 }
