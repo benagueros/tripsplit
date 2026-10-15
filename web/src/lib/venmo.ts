@@ -34,7 +34,10 @@ export function venmoWebLink(): string {
 // work where the Venmo app is installed, so desktop users paste this into
 // Venmo's web app (or a message) instead of tapping a dead deep link.
 // Single line: Venmo's note field is single-line, so a pasted newline may
-// strip the trip-identifying note.
+// strip the trip-identifying note. Strip CR/LF from the inputs too —
+// trip/member names arrive via text inputs, but a direct API call could
+// smuggle in a newline and reintroduce multi-line paste.
 export function venmoPaymentDetails(toName: string, amountDollars: string, note: string): string {
-  return `Pay ${toName} $${amountDollars} — ${note}`;
+  const oneLine = (s: string) => s.replace(/[\r\n]+/g, " ");
+  return `Pay ${oneLine(toName)} $${amountDollars} — ${oneLine(note)}`;
 }

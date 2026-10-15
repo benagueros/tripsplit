@@ -111,6 +111,16 @@ Deno.serve(async (req) => {
       .eq("id", tripId)
       .eq("polar_checkout_pending_at", claimedAt);
 
+  // Never let a release failure mask the real error: the client should get
+  // the clean 502, not a bare 500 from the cleanup path.
+  const safeReleaseSlot = async () => {
+    try {
+      await releaseSlot();
+    } catch (e) {
+      console.error("polar-checkout: slot release failed", e instanceof Error ? e.message : e);
+    }
+  };
+
   // Create the Polar checkout. Metadata ties the subscription back to this trip.
   // A network throw (or an unparseable body) must release the slot too —
   // otherwise a transient blip strands it for 30 minutes. The success path
@@ -135,20 +145,22 @@ Deno.serve(async (req) => {
       const err = await res.text();
       console.error("polar-checkout: Polar API error", res.status, err.slice(0, 500));
       // Release the slot: no checkout was created.
-      await releaseSlot();
+      await safeReleaseSlot();
       return json({ error: "Could not start checkout. Try again." }, 502);
     }
 
     checkout = await res.json() as { url?: string; id?: string };
   } catch (e) {
     console.error("polar-checkout: Polar request failed", e instanceof Error ? e.message : e);
-    await releaseSlot();
+    await safeReleaseSlot();
     return json({ error: "Could not start checkout. Try again." }, 502);
   }
 
-  if (!checkout.url) {
-    // Polar answered without a URL: no usable checkout exists, free the slot.
-    await releaseSlot();
+  if (typeof checkout?.url !== "string") {
+    // Polar answered without a usable URL (or a null body): no checkout
+    // exists, free the slot. typeof-check first: a null body would throw
+    // TypeError on property access.
+    await safeReleaseSlot();
     return json({ error: "Checkout URL missing." }, 502);
   }
 
