@@ -7,6 +7,9 @@
 //     Polar uses the Standard Webhooks scheme: headers webhook-id,
 //     webhook-timestamp, webhook-signature (v1,<base64 HMAC-SHA256 of
 //     "<id>.<timestamp>.<raw body>")).
+//   POLAR_API_TOKEN — project-wide secret (shared with polar-checkout).
+//     Used only to resolve same-second event ties via the Polar API;
+//     the handler works without it (falls back to arrival order).
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -16,6 +19,32 @@ const WEBHOOK_SECRET = Deno.env.get("POLAR_WEBHOOK_SECRET")!;
 
 const PAID_STATUSES = new Set(["active", "trialing"]);
 const FREE_STATUSES = new Set(["canceled", "expired", "revoked", "unpaid"]);
+
+function tierOfStatus(status: string): "paid" | "free" | null {
+  if (PAID_STATUSES.has(status)) return "paid";
+  if (FREE_STATUSES.has(status)) return "free";
+  return null;
+}
+
+// Ground truth for same-second event ties (see below): ask Polar for the
+// subscription's current status instead of guessing from arrival order.
+// Returns null when the token is missing or the lookup fails — the caller
+// falls back to arrival order and logs loudly.
+async function groundTruthTier(subscriptionId: string): Promise<"paid" | "free" | null> {
+  const token = Deno.env.get("POLAR_API_TOKEN");
+  if (!token || !subscriptionId) return null;
+  try {
+    const res = await fetch(
+      `https://api.polar.sh/v1/subscriptions/${encodeURIComponent(subscriptionId)}`,
+      { headers: { "Authorization": `Bearer ${token}` } },
+    );
+    if (!res.ok) return null;
+    const sub = await res.json() as { status?: string };
+    return tierOfStatus(String(sub.status ?? ""));
+  } catch {
+    return null;
+  }
+}
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -135,9 +164,7 @@ Deno.serve(async (req) => {
     return json({ ok: true, ignored: "no trip_id" });
   }
 
-  let tier: "paid" | "free" | null = null;
-  if (PAID_STATUSES.has(status)) tier = "paid";
-  else if (FREE_STATUSES.has(status)) tier = "free";
+  let tier: "paid" | "free" | null = tierOfStatus(status);
 
   if (!tier) {
     return json({ ok: true, ignored: `status ${status}` });
@@ -151,26 +178,86 @@ Deno.serve(async (req) => {
   // overwriting polar_subscription_id, after which the old sub's "canceled"
   // event would downgrade a trip that's actually paying on a new sub.
   // Track the newest applied event timestamp per trip and ignore anything
-  // strictly older. (Same-second events apply in arrival order; tier sets
-  // are idempotent so a retried duplicate is harmless.)
+  // strictly older. A retried duplicate (same timestamp AND same event id)
+  // is ignored — the first application already stored the state. Two
+  // DISTINCT events in the same second have ambiguous order at 1s
+  // resolution, so resolve the tie against Polar's API (ground truth)
+  // instead of trusting arrival order.
   const eventTs = Number(timestamp); // validated finite by verifySignature
-  const { data: trip, error: tripErr } = await supabase
-    .from("trips")
-    .select("tier, polar_subscription_id, polar_last_event_ts")
-    .eq("id", tripId)
-    .single();
-  if (tripErr) {
-    console.error("polar-webhook: trip lookup failed", tripErr.message);
-    return json({ error: "trip lookup failed" }, 500);
+
+  // Fetch the trip, tolerating the pre-migration state: polar_last_event_id
+  // only exists after migration 20261018 is applied. Before that, run in
+  // legacy mode (1s-resolution ordering, no tie-break) rather than 500ing
+  // every event until the migration lands.
+  let trip: {
+    tier?: string | null;
+    polar_subscription_id?: string | null;
+    polar_last_event_ts?: string | null;
+    polar_last_event_id?: string | null;
+  } | null = null;
+  let tieBreakAvailable = false;
+  {
+    const withId = await supabase
+      .from("trips")
+      .select("tier, polar_subscription_id, polar_last_event_ts, polar_last_event_id")
+      .eq("id", tripId)
+      .single();
+    if (!withId.error) {
+      trip = withId.data;
+      tieBreakAvailable = true;
+    } else if (withId.error.code === "42703" || withId.error.message.includes("polar_last_event_id")) {
+      console.log("polar-webhook: polar_last_event_id missing (migration 20261018 pending) — tie-break disabled");
+      const legacy = await supabase
+        .from("trips")
+        .select("tier, polar_subscription_id, polar_last_event_ts")
+        .eq("id", tripId)
+        .single();
+      if (legacy.error) {
+        console.error("polar-webhook: trip lookup failed", legacy.error.message);
+        return json({ error: "trip lookup failed" }, 500);
+      }
+      trip = legacy.data;
+    } else {
+      console.error("polar-webhook: trip lookup failed", withId.error.message);
+      return json({ error: "trip lookup failed" }, 500);
+    }
   }
   const lastTs = trip?.polar_last_event_ts
     ? new Date(trip.polar_last_event_ts as string).getTime() / 1000
     : null;
+  const lastEventId = (trip?.polar_last_event_id as string | null) ?? null;
   if (lastTs !== null && eventTs < lastTs) {
     console.log(
       `polar-webhook: ignoring out-of-order ${type} for trip ${tripId} (event ts ${eventTs}, last applied ${lastTs})`
     );
     return json({ ok: true, ignored: "out-of-order event" });
+  }
+  if (lastTs !== null && eventTs === lastTs && id === lastEventId) {
+    console.log(
+      `polar-webhook: ignoring duplicate ${type} for trip ${tripId} (event ${id})`
+    );
+    return json({ ok: true, ignored: "duplicate event" });
+  }
+
+  // Same-second tie between distinct events: arrival order is meaningless,
+  // so ask Polar for the subscription's true current status. Only active
+  // once the migration has landed (tieBreakAvailable); before that, keep
+  // today's arrival-order behavior.
+  if (tieBreakAvailable && lastTs !== null && eventTs === lastTs && id !== lastEventId) {
+    console.log(
+      `polar-webhook: same-second tie for trip ${tripId} (${lastEventId} vs ${id}) — resolving via Polar API`
+    );
+    const truth = await groundTruthTier(subscriptionId);
+    if (truth !== null) {
+      console.log(
+        `polar-webhook: tie resolved for trip ${tripId}: ${truth} (event said ${tier})`
+      );
+      tier = truth;
+    } else {
+      console.error(
+        `polar-webhook: tie-break lookup failed for trip ${tripId}, applying ${type} in arrival order`
+      );
+    }
   }
 
   // Ignore stale downgrades: if the trip already points at a different (newer)
@@ -186,22 +273,24 @@ Deno.serve(async (req) => {
     }
   }
 
-  const { error } = await supabase
-    .from("trips")
-    .update({
-      tier,
-      polar_subscription_id: subscriptionId || null,
-      polar_customer_id: customerId || null,
-      polar_last_event_ts: new Date(eventTs * 1000).toISOString(),
-      // Clear the in-flight checkout marker only when this event resolves a
-      // checkout: it changes the tier, or it's for the stored subscription.
-      // A late event for a *different* subscription must not reopen the
-      // double-subscription window the marker was built to close.
-      ...((tier !== trip?.tier || (trip?.polar_subscription_id ?? null) === subscriptionId)
-        ? { polar_checkout_pending_at: null }
-        : {}),
-    })
-    .eq("id", tripId);
+  const update: Record<string, unknown> = {
+    tier,
+    polar_subscription_id: subscriptionId || null,
+    polar_customer_id: customerId || null,
+    polar_last_event_ts: new Date(eventTs * 1000).toISOString(),
+    // Clear the in-flight checkout marker only when this event resolves a
+    // checkout: it changes the tier, or it's for the stored subscription.
+    // A late event for a *different* subscription must not reopen the
+    // double-subscription window the marker was built to close.
+    ...((tier !== trip?.tier || (trip?.polar_subscription_id ?? null) === subscriptionId)
+      ? { polar_checkout_pending_at: null }
+      : {}),
+  };
+  // Only write the tie-break column once the migration exists; otherwise
+  // the update would fail on the unknown column (see the select fallback).
+  if (tieBreakAvailable) update.polar_last_event_id = id;
+
+  const { error } = await supabase.from("trips").update(update).eq("id", tripId);
 
   if (error) {
     console.error("polar-webhook: trip update failed", error.message);

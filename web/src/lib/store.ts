@@ -21,6 +21,24 @@ export interface TripData {
   payments: Payment[];
 }
 
+// PostgREST silently caps a single select at 1000 rows. A big trip would
+// load truncated data and compute wrong balances, so page through every
+// list query. RLS already scopes each query to this trip; pagination only
+// defeats the row cap. The id tiebreaker keeps page boundaries stable if
+// data changes mid-reload (realtime fires a fresh reload anyway).
+const PAGE_SIZE = 1000;
+async function fetchAll<T>(makeQuery: () => any): Promise<T[]> {
+  const out: T[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await makeQuery().range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    const rows = (data ?? []) as T[];
+    out.push(...rows);
+    if (rows.length < PAGE_SIZE) break;
+  }
+  return out;
+}
+
 export function useTripData(tripId: string | null) {
   const [data, setData] = useState<TripData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -32,37 +50,39 @@ export function useTripData(tripId: string | null) {
     setError(null);
     try {
       const db = authedClient();
-      const expenseIdsRes = await db.from("expenses").select("id").eq("trip_id", tripId);
-      const expenseIdList: string[] = expenseIdsRes.data?.map((e) => e.id) ?? [];
+      const expenseIdList = (
+        await fetchAll<{ id: string }>(() =>
+          db.from("expenses").select("id").eq("trip_id", tripId).order("id"),
+        )
+      ).map((e) => e.id);
       const itemScope = expenseIdList.length > 0 ? expenseIdList : ["00000000-0000-0000-0000-000000000000"];
       const [
         tripRes,
-        membersRes,
-        expensesRes,
-        itemsRes,
-        claimsRes,
-        unitsRes,
-        unitPartsRes,
-        sharesRes,
-        paymentsRes,
+        members,
+        expenses,
+        items,
+        claimRows,
+        unitRows,
+        unitPartRows,
+        shareRows,
+        payments,
       ] = await Promise.all([
         db.from("trips").select().eq("id", tripId).single(),
-        db.from("members").select().eq("trip_id", tripId).order("created_at"),
-        db.from("expenses").select().eq("trip_id", tripId).order("created_at"),
-        db.from("receipt_items").select().in("expense_id", itemScope).order("sort"),
-        db.from("item_claims").select(),
-        db.from("per_day_units").select(),
-        db.from("per_day_participants").select(),
-        db.from("simple_shares").select(),
-        db.from("payments").select().eq("trip_id", tripId).order("created_at"),
+        fetchAll<Member>(() => db.from("members").select().eq("trip_id", tripId).order("created_at").order("id")),
+        fetchAll<Expense>(() => db.from("expenses").select().eq("trip_id", tripId).order("created_at").order("id")),
+        fetchAll<ReceiptItem>(() => db.from("receipt_items").select().in("expense_id", itemScope).order("sort").order("id")),
+        fetchAll<{ receipt_item_id: string; member_id: string; qty?: number }>(() => db.from("item_claims").select().order("id")),
+        fetchAll<{ id: string; expense_id: string; unit_index: number; label: string }>(() => db.from("per_day_units").select().order("id")),
+        fetchAll<{ unit_id: string; member_id: string }>(() => db.from("per_day_participants").select().order("id")),
+        fetchAll<{ expense_id: string; member_id: string; amount_cents: number }>(() => db.from("simple_shares").select().order("id")),
+        fetchAll<Payment>(() => db.from("payments").select().eq("trip_id", tripId).order("created_at").order("id")),
       ]);
       if (tripRes.error) throw tripRes.error;
 
-      const expenses: Expense[] = expensesRes.data ?? [];
       const expenseIds = new Set(expenses.map((e) => e.id));
 
       const claims = new Map<string, { member_id: string; qty: number }[]>();
-      for (const c of (claimsRes.data ?? []) as { receipt_item_id: string; member_id: string; qty?: number }[]) {
+      for (const c of claimRows) {
         const arr = claims.get(c.receipt_item_id) ?? [];
         arr.push({ member_id: c.member_id, qty: c.qty ?? 1 });
         claims.set(c.receipt_item_id, arr);
@@ -70,12 +90,12 @@ export function useTripData(tripId: string | null) {
 
       const unitsByExpense = new Map<string, PerDayUnit[]>();
       const partsByUnit = new Map<string, string[]>();
-      for (const p of (unitPartsRes.data ?? []) as { unit_id: string; member_id: string }[]) {
+      for (const p of unitPartRows) {
         const arr = partsByUnit.get(p.unit_id) ?? [];
         arr.push(p.member_id);
         partsByUnit.set(p.unit_id, arr);
       }
-      for (const u of (unitsRes.data ?? []) as { id: string; expense_id: string; unit_index: number; label: string }[]) {
+      for (const u of unitRows) {
         if (!expenseIds.has(u.expense_id)) continue;
         const arr = unitsByExpense.get(u.expense_id) ?? [];
         arr.push({
@@ -90,7 +110,7 @@ export function useTripData(tripId: string | null) {
       for (const arr of unitsByExpense.values()) arr.sort((a, b) => a.unit_index - b.unit_index);
 
       const simpleShares = new Map<string, SimpleSplitShare[]>();
-      for (const s of (sharesRes.data ?? []) as { expense_id: string; member_id: string; amount_cents: number }[]) {
+      for (const s of shareRows) {
         if (!expenseIds.has(s.expense_id)) continue;
         const arr = simpleShares.get(s.expense_id) ?? [];
         arr.push({ member_id: s.member_id, amount_cents: s.amount_cents });
@@ -99,13 +119,13 @@ export function useTripData(tripId: string | null) {
 
       setData({
         trip: tripRes.data,
-        members: membersRes.data ?? [],
+        members,
         expenses,
-        receiptItems: (itemsRes.data ?? []).filter((it: ReceiptItem) => expenseIds.has(it.expense_id)),
+        receiptItems: items.filter((it) => expenseIds.has(it.expense_id)),
         claims,
         simpleShares,
         perDayUnits: unitsByExpense,
-        payments: paymentsRes.data ?? [],
+        payments,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load trip.");
