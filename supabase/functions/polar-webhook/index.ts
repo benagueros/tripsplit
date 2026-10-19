@@ -36,7 +36,12 @@ async function groundTruthTier(subscriptionId: string): Promise<"paid" | "free" 
   try {
     const res = await fetch(
       `https://api.polar.sh/v1/subscriptions/${encodeURIComponent(subscriptionId)}`,
-      { headers: { "Authorization": `Bearer ${token}` } },
+      {
+        headers: { "Authorization": `Bearer ${token}` },
+        // Don't let a hung Polar API hold the webhook open until the
+        // platform kills it; an abort falls through to arrival order.
+        signal: AbortSignal.timeout(12000),
+      },
     );
     if (!res.ok) return null;
     const sub = await res.json() as { status?: string };

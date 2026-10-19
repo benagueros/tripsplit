@@ -27,6 +27,9 @@ export interface TripData {
 // defeats the row cap. The id tiebreaker keeps page boundaries stable if
 // data changes mid-reload (realtime fires a fresh reload anyway).
 const PAGE_SIZE = 1000;
+// Keep each .in("expense_id", ...) query string well under gateway URL
+// limits: 150 UUIDs ≈ 5.5KB + query overhead.
+const ITEM_SCOPE_CHUNK = 150;
 async function fetchAll<T>(makeQuery: () => any): Promise<T[]> {
   const out: T[] = [];
   for (let from = 0; ; from += PAGE_SIZE) {
@@ -70,7 +73,22 @@ export function useTripData(tripId: string | null) {
         db.from("trips").select().eq("id", tripId).single(),
         fetchAll<Member>(() => db.from("members").select().eq("trip_id", tripId).order("created_at").order("id")),
         fetchAll<Expense>(() => db.from("expenses").select().eq("trip_id", tripId).order("created_at").order("id")),
-        fetchAll<ReceiptItem>(() => db.from("receipt_items").select().in("expense_id", itemScope).order("sort").order("id")),
+        // Chunk the .in() list: 200+ expense ids in one query string can
+        // exceed gateway URL limits (~8KB) and fail the whole load.
+        // Each chunk stays sorted; re-sort after concatenating.
+        (async () => {
+          const out: ReceiptItem[] = [];
+          for (let i = 0; i < itemScope.length; i += ITEM_SCOPE_CHUNK) {
+            const chunk = itemScope.slice(i, i + ITEM_SCOPE_CHUNK);
+            out.push(
+              ...(await fetchAll<ReceiptItem>(() =>
+                db.from("receipt_items").select().in("expense_id", chunk).order("sort").order("id"),
+              )),
+            );
+          }
+          out.sort((a, b) => a.sort - b.sort || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+          return out;
+        })(),
         fetchAll<{ receipt_item_id: string; member_id: string; qty?: number }>(() => db.from("item_claims").select().order("id")),
         fetchAll<{ id: string; expense_id: string; unit_index: number; label: string }>(() => db.from("per_day_units").select().order("id")),
         fetchAll<{ unit_id: string; member_id: string }>(() => db.from("per_day_participants").select().order("id")),
