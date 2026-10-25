@@ -243,10 +243,16 @@ Deno.serve(async (req) => {
       return json({ error: "Something went wrong — try again." }, 500);
     }
     reservationId = usageRow.id as string;
-    const { count } = await supabase.from("scan_usage")
+    const { count, error: countErr } = await supabase.from("scan_usage")
       .select("id", { count: "exact", head: true })
       .eq("trip_id", tripId)
       .gte("created_at", monthStart.toISOString());
+    // Fail closed: an unknown count must not waive the quota.
+    if (countErr) {
+      await releaseReservation();
+      console.error("ocr-scan: quota count failed", countErr.message);
+      return json({ error: "Something went wrong — try again." }, 500);
+    }
     if ((count ?? 0) > quota) {
       await releaseReservation();
       return json({

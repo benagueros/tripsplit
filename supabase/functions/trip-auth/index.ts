@@ -25,6 +25,20 @@ function randomToken(): string {
     .replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
 
+// Crypto-secure uniform int in [0, max): Math.random is predictable, and
+// trip codes are the only thing standing between a stranger and full trip
+// access. Rejection sampling avoids modulo bias.
+function randomInt(max: number): number {
+  const arr = new Uint32Array(1);
+  const limit = Math.floor(0x100000000 / max) * max;
+  let x: number;
+  do {
+    crypto.getRandomValues(arr);
+    x = arr[0];
+  } while (x >= limit);
+  return x % max;
+}
+
 function base64url(data: Uint8Array | string): string {
   const bin = typeof data === "string"
     ? data
@@ -71,11 +85,21 @@ async function checkRateLimit(
   const ip = fwd?.split(",").map((s) => s.trim()).filter(Boolean).pop() ?? "unknown";
   const minuteAgo = new Date(Date.now() - 60_000).toISOString();
   await supabase.from("join_attempts").delete().lt("created_at", minuteAgo);
-  const { count } = await supabase.from("join_attempts")
+  const { count, error: countErr } = await supabase.from("join_attempts")
     .select("ip", { count: "exact", head: true })
     .eq("ip", ip).gte("created_at", minuteAgo);
+  // Fail closed: an unknown count must not waive the limit, and an
+  // unrecorded attempt must not slip past it either.
+  if (countErr) {
+    console.error("trip-auth: rate-limit count failed", countErr.message);
+    return false;
+  }
   if ((count ?? 0) >= limit) return false;
-  await supabase.from("join_attempts").insert({ ip });
+  const { error: insertErr } = await supabase.from("join_attempts").insert({ ip });
+  if (insertErr) {
+    console.error("trip-auth: rate-limit record failed", insertErr.message);
+    return false;
+  }
   return true;
 }
 
@@ -121,8 +145,8 @@ Deno.serve(async (req) => {
       // join attempts are also rate-limited below.
       let code = "";
       for (let attempt = 0; attempt < 20; attempt++) {
-        const word = WORDS[Math.floor(Math.random() * WORDS.length)];
-        const digits = String(Math.floor(100000 + Math.random() * 900000));
+        const word = WORDS[randomInt(WORDS.length)];
+        const digits = String(100000 + randomInt(900000));
         const candidate = `${word}-${digits}`;
         const { data } = await supabase.from("trips").select("id").eq("code", candidate).maybeSingle();
         if (!data) { code = candidate; break; }

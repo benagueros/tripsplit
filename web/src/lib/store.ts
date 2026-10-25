@@ -327,10 +327,15 @@ export async function updateReceiptExpense(args: {
   }
 
   // Old items (and their claims via cascade) go away only after the new
-  // data is safely stored.
+  // data is safely stored. If the delete fails, roll the new data back
+  // (its claims cascade with it) so the receipt isn't left with both old
+  // and new items duplicated.
   if (oldIds.length > 0) {
     const { error: delErr } = await db.from("receipt_items").delete().in("id", oldIds);
-    if (delErr) throw delErr;
+    if (delErr) {
+      if (newIds.length > 0) await db.from("receipt_items").delete().in("id", newIds);
+      throw delErr;
+    }
   }
 }
 
@@ -433,6 +438,13 @@ export async function deleteExpense(expenseId: string) {
   if (error) throw error;
 }
 
+/** Delete a recorded payment (undo a mistaken mark-as-paid). */
+export async function deletePayment(paymentId: string) {
+  const db = authedClient();
+  const { error } = await db.from("payments").delete().eq("id", paymentId);
+  if (error) throw error;
+}
+
 /** Add a member to an existing trip (for late joiners, plus-ones, ...). */
 export async function addMember(tripId: string, name: string) {
   // NFC-normalize so visually identical names ("José" precomposed vs.
@@ -481,12 +493,20 @@ export async function removeMember(memberId: string) {
   if (!member) throw new Error("Person not found.");
   const checks = await Promise.all([
     db.from("expenses").select("id", { count: "exact", head: true }).eq("paid_by_member_id", memberId),
-    db.from("item_claims").select("id", { count: "exact", head: true }).eq("member_id", memberId),
-    db.from("simple_shares").select("id", { count: "exact", head: true }).eq("member_id", memberId),
+    // item_claims/simple_shares are composite-PK tables with no id column;
+    // selecting one errored the count query, which read as zero and let
+    // the guard pass (Oct 25 review). Select a real column instead.
+    db.from("item_claims").select("member_id", { count: "exact", head: true }).eq("member_id", memberId),
+    db.from("simple_shares").select("member_id", { count: "exact", head: true }).eq("member_id", memberId),
     db.from("per_day_participants").select("unit_id", { count: "exact", head: true }).eq("member_id", memberId),
     db.from("payments").select("id", { count: "exact", head: true })
       .or(`from_member_id.eq.${memberId},to_member_id.eq.${memberId}`),
   ]);
+  // Fail closed: a failed check must block removal, not read as "no items"
+  // and let the cascade silently drop the member's claims/shares.
+  if (checks.some((r) => r.error)) {
+    throw new Error("Could not verify outstanding items — please try again.");
+  }
   if (checks.some((r) => (r.count ?? 0) > 0)) {
     throw new Error(
       `${(member as { name: string }).name} has expenses, claims, or payments on this trip — settle up first.`

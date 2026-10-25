@@ -18,7 +18,9 @@ const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const WEBHOOK_SECRET = Deno.env.get("POLAR_WEBHOOK_SECRET")!;
 
 const PAID_STATUSES = new Set(["active", "trialing"]);
-const FREE_STATUSES = new Set(["canceled", "expired", "revoked", "unpaid"]);
+// paused: not currently paying, so it downgrades like unpaid. If the user
+// resumes, Polar sends an active event and the webhook re-upgrades.
+const FREE_STATUSES = new Set(["canceled", "expired", "revoked", "unpaid", "paused"]);
 
 function tierOfStatus(status: string): "paid" | "free" | null {
   if (PAID_STATUSES.has(status)) return "paid";

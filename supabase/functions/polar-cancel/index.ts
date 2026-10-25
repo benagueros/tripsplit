@@ -99,7 +99,7 @@ Deno.serve(async (req) => {
     Authorization: `Bearer ${POLAR_API_TOKEN}`,
     "Content-Type": "application/json",
   };
-  const subUrl = `https://api.polar.sh/v1/subscriptions/${subId}`;
+  const subUrl = `https://api.polar.sh/v1/subscriptions/${encodeURIComponent(subId)}`;
 
   if (action === "cancel" || action === "resume") {
     const res = await fetch(subUrl, {

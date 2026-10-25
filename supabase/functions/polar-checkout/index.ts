@@ -132,7 +132,13 @@ Deno.serve(async (req) => {
       headers: {
         "Authorization": `Bearer ${POLAR_API_TOKEN}`,
         "Content-Type": "application/json",
+        // Deterministic per slot claim: a transport-level retry of the same
+        // claim reuses the key instead of creating a second checkout.
+        "Idempotency-Key": `tripsplit-checkout-${tripId}-${claimedAt}`,
       },
+      // Don't hang the handler if api.polar.sh stalls; the catch releases
+      // the slot so the user can retry.
+      signal: AbortSignal.timeout(30000),
       body: JSON.stringify({
         products: [POLAR_PRODUCT_ID],
         metadata: { trip_id: tripId },

@@ -5,7 +5,7 @@ import {
   netBalances,
   simplifyDebts,
 } from "../lib/settle";
-import { confirmPayment, deleteExpense, recordPayment, type TripData } from "../lib/store";
+import { confirmPayment, deleteExpense, deletePayment, recordPayment, type TripData } from "../lib/store";
 import { venmoChargeLink, venmoPayLink, venmoPaymentDetails } from "../lib/venmo";
 import Icon from "../components/Icon";
 import { Avatar } from "../components/Person";
@@ -124,6 +124,16 @@ export default function Balances({
     if (!window.confirm(`Delete "${expenseName}"? This can't be undone.`)) return;
     try {
       await deleteExpense(expenseId);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't delete.");
+    }
+  };
+
+  const removePayment = async (paymentId: string) => {
+    if (!window.confirm("Delete this payment record? Balances will recalculate.")) return;
+    try {
+      await deletePayment(paymentId);
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't delete.");
@@ -250,6 +260,13 @@ export default function Balances({
               >
                 {nameOf(p.to_member_id)}: got it ✓
               </button>
+              <button
+                className="btn ghost small"
+                style={{ width: "100%" }}
+                onClick={() => removePayment(p.id)}
+              >
+                <Icon name="trash" size={15} /> Delete payment
+              </button>
             </div>
           ))}
         </>
@@ -263,6 +280,9 @@ export default function Balances({
               <div className="done-row" key={p.id}>
                 <span>{nameOf(p.from_member_id)} → {nameOf(p.to_member_id)}</span>
                 <b>{formatMoney(p.amount_cents)} ✓</b>
+                <button className="btn ghost small" onClick={() => removePayment(p.id)}>
+                  <Icon name="trash" size={15} />
+                </button>
               </div>
             ))}
           </div>
