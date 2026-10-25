@@ -89,10 +89,10 @@ export function useTripData(tripId: string | null) {
           out.sort((a, b) => a.sort - b.sort || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
           return out;
         })(),
-        fetchAll<{ receipt_item_id: string; member_id: string; qty?: number }>(() => db.from("item_claims").select().order("id")),
+        fetchAll<{ receipt_item_id: string; member_id: string; qty?: number }>(() => db.from("item_claims").select().order("receipt_item_id").order("member_id")),
         fetchAll<{ id: string; expense_id: string; unit_index: number; label: string }>(() => db.from("per_day_units").select().order("id")),
-        fetchAll<{ unit_id: string; member_id: string }>(() => db.from("per_day_participants").select().order("id")),
-        fetchAll<{ expense_id: string; member_id: string; amount_cents: number }>(() => db.from("simple_shares").select().order("id")),
+        fetchAll<{ unit_id: string; member_id: string }>(() => db.from("per_day_participants").select().order("unit_id").order("member_id")),
+        fetchAll<{ expense_id: string; member_id: string; amount_cents: number }>(() => db.from("simple_shares").select().order("expense_id").order("member_id")),
         fetchAll<Payment>(() => db.from("payments").select().eq("trip_id", tripId).order("created_at").order("id")),
       ]);
       if (tripRes.error) throw tripRes.error;
