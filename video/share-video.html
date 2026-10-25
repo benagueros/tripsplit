@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TripSplit share video</title>
+<!--
+  The share video for tripsplit.us (og:video): 1200 x 630, 6.5 s, 30 fps.
+
+  The landing hero in motion: the logo row settles in, "Snap. Claim." and
+  "Settled." land one word at a time, the green bar sweeps under "Settled."
+  from the left, and the lead line fades in. Colours and type follow
+  web/src/styles.css (:root, .logo, .mega, .hl).
+
+  Every frame is a pure function of time, renderAt(t). Open the page over
+  http (not file://, or the fonts do not load) to play it with the scrub bar.
+  ../../shotkit/video.mjs records it frame by frame, from the project root:
+
+    node ../shotkit/video.mjs video/share-video.html --root . --out web/public/share-video.mp4
+
+  The fonts are the three Google Fonts web/index.html loads.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=JetBrains+Mono:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400..800&display=swap">
+<style>
+  :root {
+    --bg: #0a1011;
+    --ink: #eef6f2;
+    --ink-2: #b9c7c1;
+    --line: rgba(214, 255, 236, 0.075);
+    --line-2: rgba(214, 255, 236, 0.14);
+    --accent: #12a770;
+    --accent-text: #4ee3a5;
+    --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+    --font-body: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  }
+  html, body { margin: 0; background: #050808; color: var(--ink); font-family: var(--font-body); }
+  .stage { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16px; box-sizing: border-box; min-height: 100vh; }
+  #v { position: relative; flex: none; width: 1200px; height: 630px; overflow: hidden; background: var(--bg); border-radius: 22px; }
+  .bar { display: flex; gap: 10px; align-items: center; width: 1200px; }
+  .bar button { font: 600 14px var(--font-body); color: #03221a; background: var(--accent); border: 0; border-radius: 999px; padding: 8px 16px; cursor: pointer; }
+  .bar input { flex: 1; accent-color: var(--accent); }
+  .bar output { font: 13px var(--font-mono); color: #80928c; min-width: 44px; text-align: right; }
+  body.export .bar { display: none; }
+  body.export .stage { padding: 0; min-height: 0; display: block; }
+  body.export #v { border-radius: 0; }
+
+  /* The stage: the faint grid and the green glow the hero panels have. */
+  .grid { position: absolute; inset: 0; background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size: 40px 40px; background-position: 20px 15px; }
+  .glow { position: absolute; inset: 0; background: radial-gradient(55% 48% at 50% 72%, rgba(18, 167, 112, 0.26), transparent 70%); }
+
+  .col { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 26px; }
+
+  .logo { display: flex; align-items: center; gap: 14px; font: 800 58px/1 var(--font-display); letter-spacing: -0.035em; color: #fff; }
+  .logo img { width: 72px; height: 72px; border-radius: 20px; display: block; box-shadow: 0 0 0 1px var(--line-2), 0 0 40px rgba(61, 240, 166, 0.25); }
+  .logo em { font-style: normal; color: var(--accent-text); }
+
+  .mega { margin: 0; text-align: center; color: #fff; text-transform: uppercase; font: 800 126px/0.86 var(--font-display); letter-spacing: -0.045em; }
+  .w { display: inline-block; }
+  .hl { position: relative; z-index: 0; white-space: nowrap; }
+  .hl .bar-hl { position: absolute; z-index: -1; left: -0.04em; right: -0.02em; bottom: 0.17em; height: 0.3em; background: var(--accent); border-radius: 0.06em; box-shadow: 0 0 46px rgba(61, 240, 166, 0.55); transform-origin: 0 50%; }
+
+  .lead { margin: 6px 0 0; font: 400 27px/1.4 var(--font-body); color: var(--ink-2); text-align: center; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div id="v" role="img" aria-label="The TripSplit logo, then the line Snap. Claim. Settled. with a green bar under Settled.">
+    <div class="grid"></div>
+    <div class="glow"></div>
+    <div class="col">
+      <div class="logo" id="logo">
+        <img src="../web/public/icon-512.png" alt="">
+        <span>trip<em>split</em></span>
+      </div>
+      <h1 class="mega">
+        <span class="w" id="w1">Snap.</span>
+        <span class="w" id="w2">Claim.</span>
+        <br>
+        <span class="w hl" id="w3"><i class="bar-hl" id="bar"></i>Settled.</span>
+      </h1>
+      <p class="lead" id="lead">Share one link in the group chat and you're done.</p>
+    </div>
+  </div>
+  <div class="bar">
+    <button id="play" type="button">Pause</button>
+    <input id="scrub" type="range" min="0" max="6.5" step="0.01" value="0" aria-label="Time">
+    <output id="clock">0.0s</output>
+  </div>
+</div>
+<script>
+const END = 6.5;
+
+// ------------------------------------------------------------- timing ---
+
+const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+/** 0 to 1 over the `d` seconds that start at `a`. */
+const prog = (t, a, d) => clamp((t - a) / d);
+
+/** A CSS cubic-bezier(x1, y1, x2, y2) as a function of progress. */
+function bezier(x1, y1, x2, y2) {
+  const A = (a1, a2) => 1 - 3 * a2 + 3 * a1;
+  const B = (a1, a2) => 3 * a2 - 6 * a1;
+  const C = (a1) => 3 * a1;
+  const at = (t, a1, a2) => ((A(a1, a2) * t + B(a1, a2)) * t + C(a1)) * t;
+  const slope = (t, a1, a2) => 3 * A(a1, a2) * t * t + 2 * B(a1, a2) * t + C(a1);
+  return (x) => {
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+    let t = x;
+    for (let i = 0; i < 8; i++) {
+      const s = slope(t, x1, x2);
+      if (Math.abs(s) < 1e-6) break;
+      t -= (at(t, x1, x2) - x) / s;
+    }
+    return at(t, y1, y2);
+  };
+}
+
+const easeOut = bezier(0.22, 0.68, 0.16, 1);
+const easeBack = bezier(0.34, 1.4, 0.64, 1);
+
+const LOGO = { at: 0.1, for: 0.8 };
+const WORDS = [{ at: 0.95 }, { at: 1.5 }, { at: 2.05 }];
+const WORD_FOR = 0.5;
+const BAR = { at: 2.55, for: 0.6 };
+const LEAD = { at: 3.4, for: 0.8 };
+
+// -------------------------------------------------------------- frame ---
+
+const el = (id) => document.getElementById(id);
+const logo = el("logo"), words = [el("w1"), el("w2"), el("w3")], bar = el("bar"), lead = el("lead");
+
+const rise = (node, p, px) => {
+  node.style.opacity = p;
+  node.style.transform = `translateY(${px * (1 - p)}px)`;
+};
+
+window.renderAt = (t) => {
+  t = clamp(t, 0, END);
+
+  rise(logo, easeOut(prog(t, LOGO.at, LOGO.for)), 14);
+
+  words.forEach((node, i) => {
+    const p = prog(t, WORDS[i].at, WORD_FOR);
+    node.style.opacity = easeOut(p);
+    const s = 0.94 + 0.06 * easeBack(p);
+    node.style.transform = `translateY(${22 * (1 - easeOut(p))}px) scale(${s})`;
+  });
+
+  bar.style.transform = `scaleX(${easeOut(prog(t, BAR.at, BAR.for))})`;
+
+  rise(lead, easeOut(prog(t, LEAD.at, LEAD.for)), 10);
+};
+window.VIDEO_END = END;
+
+// ------------------------------------------------------------ playing ---
+
+if (new URLSearchParams(location.search).has("export")) {
+  document.body.classList.add("export");
+  window.renderAt(0);
+} else {
+  const btn = el("play"), scrub = el("scrub"), clock = el("clock");
+  let cur = 0, playing = true, last = null;
+  const show = () => { window.renderAt(cur); scrub.value = cur; clock.textContent = cur.toFixed(1) + "s"; btn.textContent = playing ? "Pause" : cur >= END ? "Replay" : "Play"; };
+  const loop = (now) => {
+    if (playing) {
+      if (last !== null) cur = Math.min(END, cur + (now - last) / 1000);
+      if (cur >= END) playing = false;
+      show();
+    }
+    last = now;
+    requestAnimationFrame(loop);
+  };
+  btn.addEventListener("click", () => { if (!playing && cur >= END) cur = 0; playing = !playing; show(); });
+  scrub.addEventListener("input", () => { cur = Number(scrub.value); playing = false; show(); });
+  document.fonts.ready.then(() => requestAnimationFrame(loop));
+}
+</script>
+</body>
+</html>
