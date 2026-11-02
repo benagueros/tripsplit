@@ -39,8 +39,9 @@ jobs:
 
       - name: Deploy edge functions
         run: |
-          supabase functions deploy trip-auth --project-ref "$PROJECT_REF"
-          supabase functions deploy ocr-scan --project-ref "$PROJECT_REF"
-          supabase functions deploy polar-checkout --no-verify-jwt --project-ref "$PROJECT_REF"
-          supabase functions deploy polar-cancel --no-verify-jwt --project-ref "$PROJECT_REF"
-          supabase functions deploy polar-webhook --no-verify-jwt --project-ref "$PROJECT_REF"
+          supabase functions deploy trip-auth --yes --project-ref "$PROJECT_REF"
+          supabase functions deploy ocr-scan --yes --project-ref "$PROJECT_REF"
+          supabase functions deploy polar-checkout --no-verify-jwt --yes --project-ref "$PROJECT_REF"
+          supabase functions deploy polar-cancel --no-verify-jwt --yes --project-ref "$PROJECT_REF"
+          supabase functions deploy polar-webhook --no-verify-jwt --yes --project-ref "$PROJECT_REF"
+
