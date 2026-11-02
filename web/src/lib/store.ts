@@ -11,7 +11,10 @@ import type {
 } from "./types";
 
 export interface TripData {
-  trip: Trip;
+  // Only the columns reload() selects: the trips row also carries the share
+  // token, the join code, and Polar billing columns, which this screen
+  // never uses (the share link comes from the session, not this row).
+  trip: Pick<Trip, "id" | "name" | "tier">;
   members: Member[];
   expenses: Expense[];
   receiptItems: ReceiptItem[];
@@ -70,7 +73,11 @@ export function useTripData(tripId: string | null) {
         shareRows,
         payments,
       ] = await Promise.all([
-        db.from("trips").select().eq("id", tripId).single(),
+        // Select only the columns the UI needs: the trips row also carries
+        // the share token, the join code, and Polar billing columns, none
+        // of which this screen uses (the share link comes from the session,
+        // not this row). Narrowing the select keeps them out of the client.
+        db.from("trips").select("id,name,tier").eq("id", tripId).single(),
         fetchAll<Member>(() => db.from("members").select().eq("trip_id", tripId).order("created_at").order("id")),
         fetchAll<Expense>(() => db.from("expenses").select().eq("trip_id", tripId).order("created_at").order("id")),
         // Chunk the .in() list: 200+ expense ids in one query string can
@@ -99,8 +106,14 @@ export function useTripData(tripId: string | null) {
 
       const expenseIds = new Set(expenses.map((e) => e.id));
 
+      const receiptItems = items.filter((it) => expenseIds.has(it.expense_id));
+      // Defense in depth: RLS already scopes claims to this trip, but drop
+      // any claim that doesn't belong to a loaded item rather than letting
+      // a stray row into settlement.
+      const itemIds = new Set(receiptItems.map((it) => it.id));
       const claims = new Map<string, { member_id: string; qty: number }[]>();
       for (const c of claimRows) {
+        if (!itemIds.has(c.receipt_item_id)) continue;
         const arr = claims.get(c.receipt_item_id) ?? [];
         arr.push({ member_id: c.member_id, qty: c.qty ?? 1 });
         claims.set(c.receipt_item_id, arr);
@@ -139,7 +152,7 @@ export function useTripData(tripId: string | null) {
         trip: tripRes.data,
         members,
         expenses,
-        receiptItems: items.filter((it) => expenseIds.has(it.expense_id)),
+        receiptItems,
         claims,
         simpleShares,
         perDayUnits: unitsByExpense,
@@ -189,48 +202,26 @@ export async function saveReceiptExpense(args: {
   claims: Map<string, { member_id: string; qty: number }[]>; // keyed by client-side temp id
 }): Promise<string> {
   const db = authedClient();
-  const { data: expense, error } = await db.from("expenses").insert({
-    trip_id: args.tripId, type: "receipt", name: args.name,
-    amount_cents: args.totalCents, paid_by_member_id: args.paidBy,
-  }).select().single();
-  if (error || !expense) throw error ?? new Error("Save failed");
-
-  const { data: items, error: itemErr } = await db.from("receipt_items").insert(
-    args.items.map((it, i) => ({
-      expense_id: expense.id, name: it.name, qty: it.qty,
-      price_cents: it.price_cents, sort: i,
-    }))
-  ).select();
-  if (itemErr) {
-    // Don't leave an orphaned expense row behind on failure.
-    await db.from("expenses").delete().eq("id", expense.id);
-    throw itemErr;
-  }
-
-  // Map client temp ids -> real ids via the sort index assigned at insert.
+  // One RPC, one transaction (see 20261102_save_rpcs.sql): no orphaned
+  // expense if the items or claims insert fails midway.
+  const items = args.items.map((it, i) => ({
+    name: it.name, qty: it.qty, price_cents: it.price_cents, sort: i,
+  }));
   // Claims are looked up by each item's OWN tempId — never by position —
   // so deleting or re-adding items can't misattach or drop claims.
-  const realIdBySort = new Map(
-    ((items ?? []) as { id: string; sort: number }[]).map((r) => [r.sort, r.id])
-  );
-  const rows: { receipt_item_id: string; member_id: string; qty: number }[] = [];
+  const claims: { item_sort: number; member_id: string; qty: number }[] = [];
   args.items.forEach((it, i) => {
-    const realId = realIdBySort.get(i);
-    if (!realId) return;
     for (const c of args.claims.get(it.tempId) ?? []) {
-      rows.push({ receipt_item_id: realId, member_id: c.member_id, qty: c.qty });
+      claims.push({ item_sort: i, member_id: c.member_id, qty: c.qty });
     }
   });
-  if (rows.length > 0) {
-    const { error: claimErr } = await db.from("item_claims").insert(rows);
-    if (claimErr) {
-      // Deleting the expense cascades to its items; don't leave a
-      // claim-less receipt behind on failure.
-      await db.from("expenses").delete().eq("id", expense.id);
-      throw claimErr;
-    }
-  }
-  return expense.id;
+  const { data, error } = await db.rpc("save_receipt_expense", {
+    p_trip_id: args.tripId, p_name: args.name, p_total_cents: args.totalCents,
+    p_paid_by: args.paidBy, p_items: items, p_claims: claims,
+  });
+  if (error) throw error;
+  if (!data) throw new Error("Save failed");
+  return data as string;
 }
 
 /** Load a receipt expense with its items and claims for editing. */
@@ -238,12 +229,13 @@ export async function getReceiptForEdit(expenseId: string): Promise<{
   name: string;
   totalCents: number;
   paidBy: string;
+  version: number;
   items: { id: string; name: string; qty: number; price_cents: number }[];
   claims: Map<string, { member_id: string; qty: number }[]>; // keyed by item id
 }> {
   const db = authedClient();
   const { data: expense, error: expErr } = await db.from("expenses")
-    .select("name, amount_cents, paid_by_member_id").eq("id", expenseId).single();
+    .select("name, amount_cents, paid_by_member_id, version").eq("id", expenseId).single();
   if (expErr || !expense) throw expErr ?? new Error("Receipt not found");
 
   const { data: items, error: itemErr } = await db.from("receipt_items")
@@ -266,6 +258,7 @@ export async function getReceiptForEdit(expenseId: string): Promise<{
     name: expense.name,
     totalCents: expense.amount_cents,
     paidBy: expense.paid_by_member_id,
+    version: expense.version,
     items: (items ?? []).map((it: { id: string; name: string; qty: number; price_cents: number }) => ({
       id: it.id, name: it.name, qty: it.qty, price_cents: it.price_cents,
     })),
@@ -276,6 +269,7 @@ export async function getReceiptForEdit(expenseId: string): Promise<{
 /** Update a receipt expense: replaces items and claims wholesale. */
 export async function updateReceiptExpense(args: {
   expenseId: string;
+  expectedVersion: number;
   name: string;
   totalCents: number;
   paidBy: string;
@@ -283,60 +277,25 @@ export async function updateReceiptExpense(args: {
   claims: Map<string, { member_id: string; qty: number }[]>; // keyed by client-side temp id
 }): Promise<void> {
   const db = authedClient();
-  const { error: expErr } = await db.from("expenses").update({
-    name: args.name, amount_cents: args.totalCents, paid_by_member_id: args.paidBy,
-  }).eq("id", args.expenseId);
-  if (expErr) throw expErr;
-
-  // Insert the NEW items + claims BEFORE deleting the old ones: a failure
-  // mid-way leaves the receipt's existing data intact instead of destroying
-  // it (the old delete-first order wiped items/claims permanently when the
-  // re-insert failed, e.g. on a constraint violation).
-  const { data: oldItems, error: oldErr } = await db.from("receipt_items")
-    .select("id").eq("expense_id", args.expenseId);
-  if (oldErr) throw oldErr;
-  const oldIds = ((oldItems ?? []) as { id: string }[]).map((r) => r.id);
-
-  const { data: items, error: itemErr } = await db.from("receipt_items").insert(
-    args.items.map((it, i) => ({
-      expense_id: args.expenseId, name: it.name, qty: it.qty,
-      price_cents: it.price_cents, sort: i,
-    }))
-  ).select();
-  if (itemErr) throw itemErr;
-
-  const newIds = ((items ?? []) as { id: string }[]).map((r) => r.id);
-  const rows: { receipt_item_id: string; member_id: string; qty: number }[] = [];
-  const realIdBySort = new Map(
-    ((items ?? []) as { id: string; sort: number }[]).map((r) => [r.sort, r.id])
-  );
+  // One RPC, one transaction (see 20261102_save_rpcs.sql). The RPC
+  // updates only where version matches what the editor loaded, so a
+  // concurrent edit that committed first fails cleanly with a
+  // "changed by someone else" error instead of silently overwriting.
+  const items = args.items.map((it, i) => ({
+    name: it.name, qty: it.qty, price_cents: it.price_cents, sort: i,
+  }));
+  const claims: { item_sort: number; member_id: string; qty: number }[] = [];
   args.items.forEach((it, i) => {
-    const realId = realIdBySort.get(i);
-    if (!realId) return;
     for (const c of args.claims.get(it.tempId) ?? []) {
-      rows.push({ receipt_item_id: realId, member_id: c.member_id, qty: c.qty });
+      claims.push({ item_sort: i, member_id: c.member_id, qty: c.qty });
     }
   });
-  if (rows.length > 0) {
-    const { error: claimErr } = await db.from("item_claims").insert(rows);
-    if (claimErr) {
-      // Best-effort rollback of what we just added; the old items are untouched.
-      if (newIds.length > 0) await db.from("receipt_items").delete().in("id", newIds);
-      throw claimErr;
-    }
-  }
-
-  // Old items (and their claims via cascade) go away only after the new
-  // data is safely stored. If the delete fails, roll the new data back
-  // (its claims cascade with it) so the receipt isn't left with both old
-  // and new items duplicated.
-  if (oldIds.length > 0) {
-    const { error: delErr } = await db.from("receipt_items").delete().in("id", oldIds);
-    if (delErr) {
-      if (newIds.length > 0) await db.from("receipt_items").delete().in("id", newIds);
-      throw delErr;
-    }
-  }
+  const { error } = await db.rpc("update_receipt_expense", {
+    p_expense_id: args.expenseId, p_expected_version: args.expectedVersion,
+    p_name: args.name, p_total_cents: args.totalCents, p_paid_by: args.paidBy,
+    p_items: items, p_claims: claims,
+  });
+  if (error) throw error;
 }
 
 export async function saveSimpleExpense(args: {
@@ -347,21 +306,17 @@ export async function saveSimpleExpense(args: {
   shares: SimpleSplitShare[];
 }) {
   const db = authedClient();
-  const { data: expense, error } = await db.from("expenses").insert({
-    trip_id: args.tripId, type: "simple", name: args.name,
-    amount_cents: args.totalCents, paid_by_member_id: args.paidBy,
-  }).select().single();
-  if (error || !expense) throw error ?? new Error("Save failed");
-  const { error: shareErr } = await db.from("simple_shares").insert(
-    args.shares.map((s) => ({
-      expense_id: expense.id, member_id: s.member_id, amount_cents: s.amount_cents,
-    }))
-  );
-  if (shareErr) {
-    await db.from("expenses").delete().eq("id", expense.id);
-    throw shareErr;
-  }
-  return expense.id;
+  // One RPC, one transaction (see 20261102_save_rpcs.sql). The deferred
+  // shares-total trigger (20261102_simple_shares_total.sql) also checks
+  // at commit that the shares sum to the total.
+  const { data, error } = await db.rpc("save_simple_expense", {
+    p_trip_id: args.tripId, p_name: args.name, p_total_cents: args.totalCents,
+    p_paid_by: args.paidBy,
+    p_shares: args.shares.map((s) => ({ member_id: s.member_id, amount_cents: s.amount_cents })),
+  });
+  if (error) throw error;
+  if (!data) throw new Error("Save failed");
+  return data as string;
 }
 
 export async function savePerDayExpense(args: {
@@ -378,36 +333,16 @@ export async function savePerDayExpense(args: {
   const empty = args.units.findIndex((u) => u.memberIds.length === 0);
   if (empty >= 0) throw new Error(`"${args.units[empty].label}" has nobody in it — add someone or remove the ${args.unitLabel}.`);
 
-  const { data: expense, error } = await db.from("expenses").insert({
-    trip_id: args.tripId, type: "per_day", name: args.name,
-    amount_cents: args.totalCents, paid_by_member_id: args.paidBy,
-    meta: { unit_count: args.units.length, unit_label: args.unitLabel, preset: args.preset },
-  }).select().single();
-  if (error || !expense) throw error ?? new Error("Save failed");
-
-  const { data: unitRows, error: unitErr } = await db.from("per_day_units").insert(
-    args.units.map((u, i) => ({ expense_id: expense.id, unit_index: i, label: u.label }))
-  ).select();
-  if (unitErr) {
-    await db.from("expenses").delete().eq("id", expense.id);
-    throw unitErr;
-  }
-
-  const rows: { unit_id: string; member_id: string }[] = [];
-  (unitRows ?? []).forEach((real: { id: string; unit_index: number }) => {
-    for (const mid of args.units[real.unit_index].memberIds) {
-      rows.push({ unit_id: real.id, member_id: mid });
-    }
+  // One RPC, one transaction (see 20261102_save_rpcs.sql). The RPC
+  // re-checks the fairness rule server-side.
+  const { data, error } = await db.rpc("save_per_day_expense", {
+    p_trip_id: args.tripId, p_name: args.name, p_total_cents: args.totalCents,
+    p_paid_by: args.paidBy, p_unit_label: args.unitLabel, p_preset: args.preset,
+    p_units: args.units.map((u) => ({ label: u.label, member_ids: u.memberIds })),
   });
-  if (rows.length > 0) {
-    const { error: partErr } = await db.from("per_day_participants").insert(rows);
-    if (partErr) {
-      // Cascades to units; don't leave a participant-less expense behind.
-      await db.from("expenses").delete().eq("id", expense.id);
-      throw partErr;
-    }
-  }
-  return expense.id;
+  if (error) throw error;
+  if (!data) throw new Error("Save failed");
+  return data as string;
 }
 
 export async function recordPayment(args: {

@@ -72,6 +72,7 @@ function parseAmountCents(s: string): number | null {
 
 export interface EditReceiptData {
   expenseId: string;
+  version: number;
   name: string;
   totalCents: number;
   paidBy: string;
@@ -319,7 +320,11 @@ export default function ReceiptFlow({
         claims: liveClaims,
       };
       if (editing && editData) {
-        await updateReceiptExpense({ expenseId: editData.expenseId, ...payload });
+        await updateReceiptExpense({
+          expenseId: editData.expenseId,
+          expectedVersion: editData.version,
+          ...payload,
+        });
       } else {
         await saveReceiptExpense({ tripId, ...payload });
       }

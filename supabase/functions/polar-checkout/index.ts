@@ -35,16 +35,26 @@ function base64urlDecode(s: string): string {
 }
 
 // Verify the trip JWT's HMAC-SHA256 signature (signed by trip-auth with
-// JWT_SECRET) and return the trip_id. The Supabase gateway's JWT check can't
+// JWT_SECRET) and return its claims. The Supabase gateway's JWT check can't
 // cover this — it validates against the project's auth secret, not ours — so
 // the signature must be checked here, otherwise anyone could forge a token
 // for any trip_id.
-async function verifyTripJwt(auth: string | null): Promise<string | null> {
+//
+// Three bindings, all required:
+//   - alg is pinned to HS256 (never taken from the token — an attacker
+//     must not be able to downgrade the algorithm);
+//   - exp is required and must be unexpired (trip-auth has minted exp
+//     since the first commit, so no legitimate token lacks it);
+//   - trip_token is returned for the caller to check against the trip row
+//     (rotating trips.token via service_role revokes outstanding JWTs).
+async function verifyTripJwt(auth: string | null): Promise<{ tripId: string; tripToken: string } | null> {
   if (!auth?.startsWith("Bearer ")) return null;
   const parts = auth.slice(7).split(".");
   if (parts.length !== 3) return null;
   const [headerB64, payloadB64, sigB64] = parts;
   try {
+    const header = JSON.parse(base64urlDecode(headerB64));
+    if (header.alg !== "HS256") return null;
     const key = await crypto.subtle.importKey(
       "raw",
       new TextEncoder().encode(JWT_SECRET),
@@ -61,8 +71,9 @@ async function verifyTripJwt(auth: string | null): Promise<string | null> {
     );
     if (!ok) return null;
     const payload = JSON.parse(base64urlDecode(payloadB64));
-    if (payload.exp && payload.exp < Date.now() / 1000) return null;
-    return payload.trip_id ?? null;
+    if (typeof payload.exp !== "number" || payload.exp < Date.now() / 1000) return null;
+    if (typeof payload.trip_id !== "string" || typeof payload.trip_token !== "string") return null;
+    return { tripId: payload.trip_id, tripToken: payload.trip_token };
   } catch {
     return null;
   }
@@ -72,8 +83,9 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
 
-  const tripId = await verifyTripJwt(req.headers.get("authorization"));
-  if (!tripId) return json({ error: "Not authorized for this trip." }, 401);
+  const claims = await verifyTripJwt(req.headers.get("authorization"));
+  if (!claims) return json({ error: "Not authorized for this trip." }, 401);
+  const tripId = claims.tripId;
 
   const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
   const { data: trip } = await supabase
@@ -82,6 +94,11 @@ Deno.serve(async (req) => {
     .eq("id", tripId)
     .single();
   if (!trip) return json({ error: "Trip not found." }, 404);
+  // Bind the JWT to the trip's current token: a rotated token invalidates
+  // outstanding JWTs (the revocation path for a leaked link).
+  if ((trip as { token: string }).token !== claims.tripToken) {
+    return json({ error: "Not authorized for this trip." }, 401);
+  }
   if (trip.tier === "paid") return json({ error: "Trip already on Plus." }, 400);
 
   // Atomically claim the checkout slot: a double-submit (or a second member

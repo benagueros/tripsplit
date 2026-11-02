@@ -58,7 +58,28 @@ export default function Balances({
     [data]
   );
   const balances = useMemo(() => netBalances(shares), [shares]);
-  const settlements = useMemo(() => simplifyDebts(balances), [balances]);
+  // Confirmed payments adjust the per-person nets BEFORE simplification:
+  // a payment from A to B reduces what A owes and what B is owed, so later
+  // expenses can't re-route the debt and resurrect an already-paid amount
+  // (the old code netted payments per-pair AFTER simplification, which is
+  // exactly how a paid debt came back). Pending payments are NOT applied
+  // here — they count only once confirmed, and keep showing under
+  // "Awaiting confirmation" until then.
+  const settledBalances = useMemo(() => {
+    const m = new Map(balances);
+    for (const p of data.payments) {
+      if (p.status !== "confirmed") continue;
+      m.set(p.from_member_id, (m.get(p.from_member_id) ?? 0) + p.amount_cents);
+      m.set(p.to_member_id, (m.get(p.to_member_id) ?? 0) - p.amount_cents);
+    }
+    return m;
+  }, [balances, data.payments]);
+  const settlements = useMemo(() => simplifyDebts(settledBalances), [settledBalances]);
+  // Remaining is just the settlements now: confirmed payments are already
+  // netted into them, and pending payments deliberately still show as owed
+  // until the recipient confirms. (An overpayment surfaces as a reverse
+  // settlement instead of being clamped to zero — money shouldn't vanish.)
+  const remaining = settlements;
 
   // Per-receipt unclaimed summary: items nobody has claimed yet. Their cost
   // currently splits evenly across everyone — surface that so the group can
@@ -79,24 +100,6 @@ export default function Balances({
     }
     return map;
   }, [data]);
-
-  // Payments already recorded reduce what's still owed.
-  const remaining = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const s of settlements) {
-      map.set(`${s.from_member_id}>${s.to_member_id}`, s.amount_cents);
-    }
-    for (const p of data.payments) {
-      const key = `${p.from_member_id}>${p.to_member_id}`;
-      map.set(key, Math.max(0, (map.get(key) ?? 0) - p.amount_cents));
-    }
-    return [...map.entries()]
-      .filter(([, amt]) => amt > 0)
-      .map(([key, amount_cents]) => {
-        const [from_member_id, to_member_id] = key.split(">");
-        return { from_member_id, to_member_id, amount_cents };
-      });
-  }, [settlements, data.payments]);
 
   const markPaid = async (from: string, to: string, amountCents: number) => {
     setError(null);
@@ -143,7 +146,10 @@ export default function Balances({
   const pendingPayments = data.payments.filter((p) => p.status === "pending");
   const confirmedPayments = data.payments.filter((p) => p.status === "confirmed");
 
-  const maxAbs = Math.max(1, ...[...balances.values()].map(Math.abs));
+  // The balance bars show the settled nets — the same nets the settlements
+  // derive from — so a fully-paid person reads "even" instead of showing a
+  // pre-payment balance that the settlements below no longer contain.
+  const maxAbs = Math.max(1, ...[...settledBalances.values()].map(Math.abs));
 
   return (
     <>
@@ -161,7 +167,7 @@ export default function Balances({
       <h2>Balances</h2>
       <div className="card" style={{ gap: 0, padding: "6px 16px" }}>
         {shares.map((s) => {
-          const bal = balances.get(s.member_id) ?? 0;
+          const bal = settledBalances.get(s.member_id) ?? 0;
           const width = `${(Math.abs(bal) / maxAbs) * 50}%`;
           return (
             <div className="bal-row" key={s.member_id}>

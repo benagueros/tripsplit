@@ -85,22 +85,24 @@ async function checkRateLimit(
   const ip = fwd?.split(",").map((s) => s.trim()).filter(Boolean).pop() ?? "unknown";
   const minuteAgo = new Date(Date.now() - 60_000).toISOString();
   await supabase.from("join_attempts").delete().lt("created_at", minuteAgo);
-  const { count, error: countErr } = await supabase.from("join_attempts")
-    .select("ip", { count: "exact", head: true })
-    .eq("ip", ip).gte("created_at", minuteAgo);
-  // Fail closed: an unknown count must not waive the limit, and an
-  // unrecorded attempt must not slip past it either.
-  if (countErr) {
-    console.error("trip-auth: rate-limit count failed", countErr.message);
-    return false;
-  }
-  if ((count ?? 0) >= limit) return false;
+  // Insert FIRST, then count: the old check-then-insert let concurrent
+  // requests all read a below-limit count and slip through together.
+  // Recording the attempt before counting means every attempt is counted,
+  // including this one — so the limit check is count > limit, not >=.
+  // Fail closed on either error, as before.
   const { error: insertErr } = await supabase.from("join_attempts").insert({ ip });
   if (insertErr) {
     console.error("trip-auth: rate-limit record failed", insertErr.message);
     return false;
   }
-  return true;
+  const { count, error: countErr } = await supabase.from("join_attempts")
+    .select("ip", { count: "exact", head: true })
+    .eq("ip", ip).gte("created_at", minuteAgo);
+  if (countErr) {
+    console.error("trip-auth: rate-limit count failed", countErr.message);
+    return false;
+  }
+  return (count ?? 0) <= limit;
 }
 
 Deno.serve(async (req) => {
@@ -143,28 +145,39 @@ Deno.serve(async (req) => {
       // Generate a unique short code like CANYON-482193. Six digits keeps it
       // human-typable while making enumeration infeasible (~10.8M combos);
       // join attempts are also rate-limited below.
-      let code = "";
+      //
+      // Atomic create: one RPC inserts the trip + members in a single
+      // transaction (see 20261102_trip_create_rpc.sql), so a members
+      // failure can't leave an orphan trip. On unique violation (a code
+      // or token collision — the old select-then-insert check was racy
+      // under concurrency), regenerate both and retry.
+      let trip: Record<string, unknown> | null = null;
+      let token = "";
       for (let attempt = 0; attempt < 20; attempt++) {
         const word = WORDS[randomInt(WORDS.length)];
         const digits = String(100000 + randomInt(900000));
         const candidate = `${word}-${digits}`;
-        const { data } = await supabase.from("trips").select("id").eq("code", candidate).maybeSingle();
-        if (!data) { code = candidate; break; }
+        const candidateToken = randomToken();
+        const { data: newTripId, error: createErr } = await supabase.rpc("create_trip_with_members", {
+          p_name: tripName, p_token: candidateToken, p_code: candidate, p_member_names: clean,
+        });
+        if (!createErr && newTripId) {
+          token = candidateToken;
+          const { data: tripRow, error: tripErr } = await supabase.from("trips")
+            .select().eq("id", newTripId).single();
+          if (tripErr || !tripRow) throw tripErr ?? new Error("Trip lookup failed");
+          trip = tripRow;
+          break;
+        }
+        if (createErr?.code !== "23505") throw createErr;
       }
-      if (!code) return json({ error: "Could not generate a trip code, try again." }, 500);
-
-      const token = randomToken();
-      const { data: trip, error: tripErr } = await supabase.from("trips")
-        .insert({ name: tripName, token, code })
-        .select().single();
-      if (tripErr) throw tripErr;
+      if (!trip) return json({ error: "Could not generate a trip code, try again." }, 500);
 
       const { data: members, error: memErr } = await supabase.from("members")
-        .insert(clean.map((n) => ({ trip_id: trip.id, name: n })))
-        .select();
+        .select().eq("trip_id", (trip as { id: string }).id);
       if (memErr) throw memErr;
 
-      const jwt = await mintJwt(trip.id, token);
+      const jwt = await mintJwt((trip as { id: string }).id, token);
       return json({ trip, members, jwt, token });
     }
 

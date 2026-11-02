@@ -280,11 +280,28 @@ Deno.serve(async (req) => {
     }
   }
 
+  // Mirror of the free-side check for paid events: if the trip is already
+  // paying on a DIFFERENT subscription, a paid event for another sub must
+  // not overwrite it — otherwise a late event for the old sub re-points
+  // the trip at the old sub, and the old sub's later cancel would wrongly
+  // downgrade a paying trip. A paid event while free (or with no stored
+  // sub) still applies — that's a resubscribe or a first subscription.
+  if (tier === "paid") {
+    const current = (trip?.polar_subscription_id as string | null) ?? null;
+    if (trip?.tier === "paid" && current && current !== subscriptionId) {
+      console.log(
+        `polar-webhook: ignoring stale ${type} for trip ${tripId} (event sub ${subscriptionId || "?"}, current ${current})`
+      );
+      return json({ ok: true, ignored: "stale subscription" });
+    }
+  }
+
+  const eventIso = new Date(eventTs * 1000).toISOString();
   const update: Record<string, unknown> = {
     tier,
     polar_subscription_id: subscriptionId || null,
     polar_customer_id: customerId || null,
-    polar_last_event_ts: new Date(eventTs * 1000).toISOString(),
+    polar_last_event_ts: eventIso,
     // Clear the in-flight checkout marker only when this event resolves a
     // checkout: it changes the tier, or it's for the stored subscription.
     // A late event for a *different* subscription must not reopen the
@@ -297,11 +314,29 @@ Deno.serve(async (req) => {
   // the update would fail on the unknown column (see the select fallback).
   if (tieBreakAvailable) update.polar_last_event_id = id;
 
-  const { error } = await supabase.from("trips").update(update).eq("id", tripId);
+  // Conditional write: the guards above ran against a snapshot, so a
+  // concurrent delivery could have applied a newer event in between. The
+  // update only lands if the stored state is still older than this event
+  // — or, for a same-second tie, still the event we read (lastEventId is
+  // null pre-migration, so the tie condition naturally skips legacy mode).
+  // Zero rows means this event lost the race and is safely ignored.
+  let query = supabase.from("trips").update(update).eq("id", tripId);
+  if (lastTs !== null && eventTs > lastTs) {
+    query = query.lt("polar_last_event_ts", eventIso);
+  } else if (lastTs !== null && eventTs === lastTs && lastEventId !== null) {
+    query = query.eq("polar_last_event_id", lastEventId);
+  }
+  const { data: updated, error } = await query.select("id");
 
   if (error) {
     console.error("polar-webhook: trip update failed", error.message);
     return json({ error: "trip update failed" }, 500);
+  }
+  if (!updated || updated.length === 0) {
+    console.log(
+      `polar-webhook: ignoring superseded ${type} for trip ${tripId} (a newer event applied first)`
+    );
+    return json({ ok: true, ignored: "superseded by newer event" });
   }
 
   console.log(`polar-webhook: trip ${tripId} -> ${tier} (${type}, ${status})`);

@@ -38,16 +38,26 @@ function base64urlDecode(s: string): string {
 }
 
 // Verify the trip JWT's HMAC-SHA256 signature (signed by trip-auth with
-// JWT_SECRET) and return the trip_id. The Supabase gateway's JWT check can't
+// JWT_SECRET) and return its claims. The Supabase gateway's JWT check can't
 // cover this — it validates against the project's auth secret, not ours — so
 // the signature must be checked here, otherwise anyone could forge a token
 // for any trip_id.
-async function verifyTripJwt(auth: string | null): Promise<string | null> {
+//
+// Three bindings, all required:
+//   - alg is pinned to HS256 (never taken from the token — an attacker
+//     must not be able to downgrade the algorithm);
+//   - exp is required and must be unexpired (trip-auth has minted exp
+//     since the first commit, so no legitimate token lacks it);
+//   - trip_token is returned for the caller to check against the trip row
+//     (rotating trips.token via service_role revokes outstanding JWTs).
+async function verifyTripJwt(auth: string | null): Promise<{ tripId: string; tripToken: string } | null> {
   if (!auth?.startsWith("Bearer ")) return null;
   const parts = auth.slice(7).split(".");
   if (parts.length !== 3) return null;
   const [headerB64, payloadB64, sigB64] = parts;
   try {
+    const header = JSON.parse(base64urlDecode(headerB64));
+    if (header.alg !== "HS256") return null;
     const key = await crypto.subtle.importKey(
       "raw",
       new TextEncoder().encode(JWT_SECRET),
@@ -64,8 +74,9 @@ async function verifyTripJwt(auth: string | null): Promise<string | null> {
     );
     if (!ok) return null;
     const payload = JSON.parse(base64urlDecode(payloadB64));
-    if (payload.exp && payload.exp < Date.now() / 1000) return null;
-    return payload.trip_id ?? null;
+    if (typeof payload.exp !== "number" || payload.exp < Date.now() / 1000) return null;
+    if (typeof payload.trip_id !== "string" || typeof payload.trip_token !== "string") return null;
+    return { tripId: payload.trip_id, tripToken: payload.trip_token };
   } catch {
     return null;
   }
@@ -201,11 +212,17 @@ Deno.serve(async (req) => {
   };
 
   try {
-    const tripId = await verifyTripJwt(req.headers.get("authorization"));
-    if (!tripId) return json({ error: "Not authorized for this trip." }, 401);
+    const claims = await verifyTripJwt(req.headers.get("authorization"));
+    if (!claims) return json({ error: "Not authorized for this trip." }, 401);
+    const tripId = claims.tripId;
 
-    const { data: trip } = await supabase.from("trips").select("id,tier").eq("id", tripId).single();
+    const { data: trip } = await supabase.from("trips").select("id,tier,token").eq("id", tripId).single();
     if (!trip) return json({ error: "Trip not found." }, 404);
+    // Bind the JWT to the trip's current token: a rotated token invalidates
+    // outstanding JWTs (the revocation path for a leaked link).
+    if ((trip as { token: string }).token !== claims.tripToken) {
+      return json({ error: "Not authorized for this trip." }, 401);
+    }
 
     // Monthly quota, counted server-side so it can't be bypassed.
     // Reserve-first: the usage row is inserted BEFORE the vision call and
@@ -224,9 +241,39 @@ Deno.serve(async (req) => {
       return json({ error: "Image is too large — please use a smaller photo." }, 413);
     }
 
-    const { image_base64, mime_type } = await req.json() as {
-      image_base64: string; mime_type: string;
-    };
+    // Read the body through a capped reader: the old await req.json()
+    // buffered the whole body before the size check below, so a chunked
+    // request (no content-length) bypassed the fast path entirely.
+    // Aborting past 10MB keeps a huge upload from eating memory.
+    if (!req.body) return json({ error: "No image provided." }, 400);
+    const reader = req.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    let tooLarge = false;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.length;
+      if (received > 10 * 1024 * 1024) {
+        tooLarge = true;
+        await reader.cancel();
+        break;
+      }
+      chunks.push(value);
+    }
+    if (tooLarge) {
+      return json({ error: "Image is too large — please use a smaller photo." }, 413);
+    }
+    const merged = new Uint8Array(received);
+    let off = 0;
+    for (const c of chunks) { merged.set(c, off); off += c.length; }
+    let bodyJson: { image_base64?: string; mime_type?: string };
+    try {
+      bodyJson = JSON.parse(new TextDecoder().decode(merged));
+    } catch {
+      return json({ error: "Invalid request." }, 400);
+    }
+    const { image_base64, mime_type } = bodyJson;
     if (!image_base64) return json({ error: "No image provided." }, 400);
     // Server-side size cap: the client downscales, but anyone with the trip
     // link can POST directly. Reject absurd payloads before they reach the
