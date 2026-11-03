@@ -318,12 +318,18 @@ Deno.serve(async (req) => {
   // concurrent delivery could have applied a newer event in between. The
   // update only lands if the stored state is still older than this event
   // — or, for a same-second tie, still the event we read (lastEventId is
-  // null pre-migration, so the tie condition naturally skips legacy mode).
-  // Zero rows means this event lost the race and is safely ignored.
+  // null pre-migration, so the tie condition naturally skips legacy mode)
+  // — or, for a first-ever event, still nothing stored. Zero rows means
+  // this event lost the race and is safely ignored.
   let query = supabase.from("trips").update(update).eq("id", tripId);
-  if (lastTs !== null && eventTs > lastTs) {
+  if (lastTs === null) {
+    // First-ever event: only land if no event has landed yet, so two
+    // concurrent first-events can't both apply in arrival order. The
+    // loser is ignored as superseded; the next event heals any staleness.
+    query = query.is("polar_last_event_ts", null);
+  } else if (eventTs > lastTs) {
     query = query.lt("polar_last_event_ts", eventIso);
-  } else if (lastTs !== null && eventTs === lastTs && lastEventId !== null) {
+  } else if (eventTs === lastTs && lastEventId !== null) {
     query = query.eq("polar_last_event_id", lastEventId);
   }
   const { data: updated, error } = await query.select("id");

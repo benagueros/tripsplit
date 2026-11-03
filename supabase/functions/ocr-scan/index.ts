@@ -224,15 +224,15 @@ Deno.serve(async (req) => {
       return json({ error: "Not authorized for this trip." }, 401);
     }
 
-    // Monthly quota, counted server-side so it can't be bypassed.
-    // Reserve-first: the usage row is inserted BEFORE the vision call and
-    // the count happens after. A plain check-then-act lets two concurrent
-    // scans both slip under the quota; the insert is the atomic reservation.
-    // Over-quota and failed scans roll their row back, so quota is never
-    // burned on failures (fail-closed: at worst a boundary race retries).
+    // Monthly quota, counted server-side so it can't be bypassed. The
+    // reservation itself happens below, before the body is read.
     const monthStart = new Date();
     monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
     const quota = QUOTAS[trip.tier] ?? QUOTAS.free;
+
+    // Static config check first: no point reserving quota for a scan that
+    // can't run.
+    if (!GEMINI_KEY) return json({ error: "Receipt scanning is not configured." }, 500);
 
     // Fast-path size guard: don't buffer a huge body just to reject it below.
     // (base64 inflates ~33%, so 10MB on the wire ≈ 7.5MB decoded.)
@@ -241,48 +241,12 @@ Deno.serve(async (req) => {
       return json({ error: "Image is too large — please use a smaller photo." }, 413);
     }
 
-    // Read the body through a capped reader: the old await req.json()
-    // buffered the whole body before the size check below, so a chunked
-    // request (no content-length) bypassed the fast path entirely.
-    // Aborting past 10MB keeps a huge upload from eating memory.
-    if (!req.body) return json({ error: "No image provided." }, 400);
-    const reader = req.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let received = 0;
-    let tooLarge = false;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      received += value.length;
-      if (received > 10 * 1024 * 1024) {
-        tooLarge = true;
-        await reader.cancel();
-        break;
-      }
-      chunks.push(value);
-    }
-    if (tooLarge) {
-      return json({ error: "Image is too large — please use a smaller photo." }, 413);
-    }
-    const merged = new Uint8Array(received);
-    let off = 0;
-    for (const c of chunks) { merged.set(c, off); off += c.length; }
-    let bodyJson: { image_base64?: string; mime_type?: string };
-    try {
-      bodyJson = JSON.parse(new TextDecoder().decode(merged));
-    } catch {
-      return json({ error: "Invalid request." }, 400);
-    }
-    const { image_base64, mime_type } = bodyJson;
-    if (!image_base64) return json({ error: "No image provided." }, 400);
-    // Server-side size cap: the client downscales, but anyone with the trip
-    // link can POST directly. Reject absurd payloads before they reach the
-    // vision API or burn quota. ~8MB decoded is far above a real receipt photo.
-    if (typeof image_base64 !== "string" || Math.floor(image_base64.length * 3 / 4) > 8 * 1024 * 1024) {
-      return json({ error: "Image is too large — please use a smaller photo." }, 413);
-    }
-    if (!GEMINI_KEY) return json({ error: "Receipt scanning is not configured." }, 500);
-
+    // Reserve BEFORE reading the body: the usage row is inserted and the
+    // count checked up front, so a caller can't burn bandwidth (up to the
+    // 10MB cap) without touching quota. Every failure path below releases
+    // the reservation, so failed scans never burn quota. Reserve-first
+    // also closes the check-then-act race: the insert is the atomic
+    // reservation, and the count includes the row just inserted.
     const { data: usageRow, error: usageErr } = await supabase
       .from("scan_usage").insert({ trip_id: tripId }).select("id").single();
     if (usageErr || !usageRow) {
@@ -306,6 +270,56 @@ Deno.serve(async (req) => {
         error: `This trip has used its ${quota} scans for the month.`,
         quota_exceeded: true,
       }, 429);
+    }
+
+    // Read the body through a capped reader: the old await req.json()
+    // buffered the whole body before the size check below, so a chunked
+    // request (no content-length) bypassed the fast path entirely.
+    // Aborting past 10MB keeps a huge upload from eating memory.
+    if (!req.body) {
+      await releaseReservation();
+      return json({ error: "No image provided." }, 400);
+    }
+    const reader = req.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    let tooLarge = false;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.length;
+      if (received > 10 * 1024 * 1024) {
+        tooLarge = true;
+        await reader.cancel();
+        break;
+      }
+      chunks.push(value);
+    }
+    if (tooLarge) {
+      await releaseReservation();
+      return json({ error: "Image is too large — please use a smaller photo." }, 413);
+    }
+    const merged = new Uint8Array(received);
+    let off = 0;
+    for (const c of chunks) { merged.set(c, off); off += c.length; }
+    let bodyJson: { image_base64?: string; mime_type?: string };
+    try {
+      bodyJson = JSON.parse(new TextDecoder().decode(merged));
+    } catch {
+      await releaseReservation();
+      return json({ error: "Invalid request." }, 400);
+    }
+    const { image_base64, mime_type } = bodyJson;
+    if (!image_base64) {
+      await releaseReservation();
+      return json({ error: "No image provided." }, 400);
+    }
+    // Server-side size cap: the client downscales, but anyone with the trip
+    // link can POST directly. Reject absurd payloads before they reach the
+    // vision API or burn quota. ~8MB decoded is far above a real receipt photo.
+    if (typeof image_base64 !== "string" || Math.floor(image_base64.length * 3 / 4) > 8 * 1024 * 1024) {
+      await releaseReservation();
+      return json({ error: "Image is too large — please use a smaller photo." }, 413);
     }
 
     let parsed: Record<string, unknown> | undefined;

@@ -137,6 +137,12 @@ Deno.serve(async (req) => {
       return json({ error: "Couldn't update the subscription." }, 502);
     }
     patchSub = (await res.json().catch(() => null)) as typeof patchSub;
+    if (!patchSub) {
+      // PATCH succeeded but returned no parseable body: the change
+      // landed, so synthesize the expected state rather than reporting
+      // failure if the confirmatory GET below fails.
+      patchSub = { status: undefined, cancel_at_period_end: action === "cancel", current_period_end: null };
+    }
   }
 
   const res = await fetch(subUrl, { headers });

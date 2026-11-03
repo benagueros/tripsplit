@@ -275,12 +275,17 @@ export async function updateReceiptExpense(args: {
   paidBy: string;
   items: { tempId: string; name: string; qty: number; price_cents: number }[];
   claims: Map<string, { member_id: string; qty: number }[]>; // keyed by client-side temp id
-}): Promise<void> {
+}): Promise<number> {
   const db = authedClient();
   // One RPC, one transaction (see 20261102_save_rpcs.sql). The RPC
   // updates only where version matches what the editor loaded, so a
   // concurrent edit that committed first fails cleanly with a
   // "changed by someone else" error instead of silently overwriting.
+  // The RPC returns the fresh version — return it instead of discarding
+  // it, so a future save-and-keep-editing flow refreshes from it rather
+  // than reusing the stale version and tripping a spurious conflict.
+  // (Today's editor closes on save and the parent clears editData, so
+  // there is no live version left to refresh.)
   const items = args.items.map((it, i) => ({
     name: it.name, qty: it.qty, price_cents: it.price_cents, sort: i,
   }));
@@ -290,12 +295,16 @@ export async function updateReceiptExpense(args: {
       claims.push({ item_sort: i, member_id: c.member_id, qty: c.qty });
     }
   });
-  const { error } = await db.rpc("update_receipt_expense", {
+  const { data: newVersion, error } = await db.rpc("update_receipt_expense", {
     p_expense_id: args.expenseId, p_expected_version: args.expectedVersion,
     p_name: args.name, p_total_cents: args.totalCents, p_paid_by: args.paidBy,
     p_items: items, p_claims: claims,
   });
   if (error) throw error;
+  if (typeof newVersion !== "number") {
+    throw new Error("Receipt save did not return a new version — please try again.");
+  }
+  return newVersion;
 }
 
 export async function saveSimpleExpense(args: {

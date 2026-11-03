@@ -169,7 +169,15 @@ Deno.serve(async (req) => {
           trip = tripRow;
           break;
         }
-        if (createErr?.code !== "23505") throw createErr;
+        // Retry ONLY on trips code/token collisions. Any other unique
+        // violation (e.g. a duplicate member name hitting
+        // members_trip_name_ci) is a real error: retrying it would burn
+        // 20 RPC round-trips and misreport the cause as a code failure.
+        const msg = createErr?.message ?? "";
+        const isCodeOrTokenCollision =
+          createErr?.code === "23505" &&
+          (msg.includes("trips_code_key") || msg.includes("trips_token_key"));
+        if (!isCodeOrTokenCollision) throw createErr;
       }
       if (!trip) return json({ error: "Could not generate a trip code, try again." }, 500);
 
