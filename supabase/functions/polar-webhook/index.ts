@@ -320,12 +320,14 @@ Deno.serve(async (req) => {
   // — or, for a same-second tie, still the event we read (lastEventId is
   // null pre-migration, so the tie condition naturally skips legacy mode)
   // — or, for a first-ever event, still nothing stored. Zero rows means
-  // this event lost the race and is safely ignored.
+  // this event lost the race; the first-event branch below re-checks
+  // before ignoring, so a newer loser still lands.
   let query = supabase.from("trips").update(update).eq("id", tripId);
   if (lastTs === null) {
     // First-ever event: only land if no event has landed yet, so two
-    // concurrent first-events can't both apply in arrival order. The
-    // loser is ignored as superseded; the next event heals any staleness.
+    // concurrent first-events can't both apply. This guard is
+    // first-committer-wins, not newest-wins — if the loser is the
+    // newer event, the re-read retry below still lands it.
     query = query.is("polar_last_event_ts", null);
   } else if (eventTs > lastTs) {
     query = query.lt("polar_last_event_ts", eventIso);
@@ -338,7 +340,34 @@ Deno.serve(async (req) => {
     console.error("polar-webhook: trip update failed", error.message);
     return json({ error: "trip update failed" }, 500);
   }
-  if (!updated || updated.length === 0) {
+  let applied = !!updated && updated.length > 0;
+  if (!applied && lastTs === null) {
+    // First-event race residual: the IS NULL guard is first-committer-
+    // wins, not newest-wins. If we entered with no stored event and
+    // lost, re-read: the winner may be an OLDER event that committed
+    // first, in which case this newer event should still land. Retry
+    // once under the lt guard (safe against a further race); if the
+    // retry also matches zero rows, a genuinely newer event won and
+    // the ignore stands.
+    const { data: current, error: rereadErr } = await supabase
+      .from("trips").select("polar_last_event_ts").eq("id", tripId).single();
+    const storedTs = current?.polar_last_event_ts
+      ? new Date(current.polar_last_event_ts as string).getTime()
+      : null;
+    if (!rereadErr && storedTs !== null && eventTs > storedTs) {
+      const { data: retried, error: retryErr } = await supabase
+        .from("trips").update(update).eq("id", tripId)
+        .lt("polar_last_event_ts", eventIso).select("id");
+      if (retryErr) {
+        console.error("polar-webhook: first-event retry failed", retryErr.message);
+        return json({ error: "trip update failed" }, 500);
+      }
+      applied = !!retried && retried.length > 0;
+    } else if (rereadErr) {
+      console.error("polar-webhook: first-event re-read failed", rereadErr.message);
+    }
+  }
+  if (!applied) {
     console.log(
       `polar-webhook: ignoring superseded ${type} for trip ${tripId} (a newer event applied first)`
     );

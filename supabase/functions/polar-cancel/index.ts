@@ -140,28 +140,42 @@ Deno.serve(async (req) => {
     if (!patchSub) {
       // PATCH succeeded but returned no parseable body: the change
       // landed, so synthesize the expected state rather than reporting
-      // failure if the confirmatory GET below fails.
-      patchSub = { status: undefined, cancel_at_period_end: action === "cancel", current_period_end: null };
+      // failure if the confirmatory GET below fails. current_period_end
+      // is deliberately OMITTED (not null): null means Polar said there
+      // is no period end, while absent means unknown.
+      patchSub = { status: undefined, cancel_at_period_end: action === "cancel" };
     }
   }
 
   const res = await fetch(subUrl, { headers });
   if (!res.ok) {
     if (patchSub) {
-      return json({
+      // current_period_end stays absent when unknown (synthesized
+      // state) so the UI can render it as unknown, not "no period end".
+      const out: Record<string, unknown> = {
         status: patchSub.status ?? null,
         cancel_at_period_end: !!patchSub.cancel_at_period_end,
-        current_period_end: patchSub.current_period_end ?? null,
-      });
+      };
+      if (patchSub.current_period_end !== undefined) {
+        out.current_period_end = patchSub.current_period_end;
+      }
+      return json(out);
     }
     console.error("polar-cancel: polar read failed", res.status, await res.text());
     return json({ error: "Couldn't read the subscription." }, 502);
   }
-  const sub = (await res.json()) as {
+  // Same guard as the PATCH parse: a 200 with a non-JSON body must not
+  // 500 a change that already landed — fall back to the PATCH state.
+  const sub = (await res.json().catch(() => patchSub)) as {
     status?: string;
     cancel_at_period_end?: boolean;
     current_period_end?: string | null;
-  };
+  } | null;
+  if (!sub) {
+    // No PATCH state to fall back to (the "status" action makes no
+    // change), so there is nothing honest to report.
+    return json({ error: "Couldn't read the subscription." }, 502);
+  }
   return json({
     status: sub.status ?? null,
     cancel_at_period_end: !!sub.cancel_at_period_end,

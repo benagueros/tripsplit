@@ -247,6 +247,13 @@ Deno.serve(async (req) => {
     // the reservation, so failed scans never burn quota. Reserve-first
     // also closes the check-then-act race: the insert is the atomic
     // reservation, and the count includes the row just inserted.
+    // Accepted trade-off: the reservation is held from before the first
+    // body byte until the body is fully read, so a stalled or very slow
+    // upload holds one quota slot for its duration (and many stalled
+    // uploads could transiently 429 legitimate scans). Every abort /
+    // error / rejection path releases it, so the hold is self-healing;
+    // if it ever bites in practice, a read deadline on the body reader
+    // would bound it.
     const { data: usageRow, error: usageErr } = await supabase
       .from("scan_usage").insert({ trip_id: tripId }).select("id").single();
     if (usageErr || !usageRow) {
