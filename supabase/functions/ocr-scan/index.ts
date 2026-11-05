@@ -248,12 +248,15 @@ Deno.serve(async (req) => {
     // also closes the check-then-act race: the insert is the atomic
     // reservation, and the count includes the row just inserted.
     // Accepted trade-off: the reservation is held from before the first
-    // body byte until the body is fully read, so a stalled or very slow
-    // upload holds one quota slot for its duration (and many stalled
-    // uploads could transiently 429 legitimate scans). Every abort /
-    // error / rejection path releases it, so the hold is self-healing;
-    // if it ever bites in practice, a read deadline on the body reader
-    // would bound it.
+    // body byte until the body is fully read, so a stalled upload holds
+    // one quota slot — but no longer indefinitely: the 30s read deadline
+    // below caps the hold, and every abort / error / rejection path
+    // releases it. What the deadline does NOT cover is a hard platform
+    // kill mid-read (timeout, deploy, runtime restart): then no release
+    // runs and the orphaned row burns one slot until month rollover.
+    // A stale-reservation sweep would need a status column to tell
+    // orphaned rows apart from completed scans, so that stays future
+    // work unless orphaning is ever observed in practice.
     const { data: usageRow, error: usageErr } = await supabase
       .from("scan_usage").insert({ trip_id: tripId }).select("id").single();
     if (usageErr || !usageRow) {
@@ -291,16 +294,42 @@ Deno.serve(async (req) => {
     const chunks: Uint8Array[] = [];
     let received = 0;
     let tooLarge = false;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      received += value.length;
-      if (received > 10 * 1024 * 1024) {
-        tooLarge = true;
-        await reader.cancel();
-        break;
+    // Bound how long a stalled upload can hold the quota reservation:
+    // without a deadline, a client that trickles bytes forever holds
+    // one slot until the platform kills the function — and a hard kill
+    // orphans the row (no release runs). 30s is far above a real
+    // receipt upload. A client abort still propagates to the outer
+    // catch, which releases the reservation as before.
+    let readTimedOut = false;
+    const readTimer = setTimeout(() => {
+      readTimedOut = true;
+      reader.cancel().catch(() => {});
+    }, 30_000);
+    try {
+      while (true) {
+        let result: ReadableStreamReadResult<Uint8Array>;
+        try {
+          result = await reader.read();
+        } catch (e) {
+          if (readTimedOut) break;
+          throw e;
+        }
+        const { done, value } = result;
+        if (done) break;
+        received += value.length;
+        if (received > 10 * 1024 * 1024) {
+          tooLarge = true;
+          await reader.cancel();
+          break;
+        }
+        chunks.push(value);
       }
-      chunks.push(value);
+    } finally {
+      clearTimeout(readTimer);
+    }
+    if (readTimedOut) {
+      await releaseReservation();
+      return json({ error: "Upload timed out — please try again with a smaller photo." }, 408);
     }
     if (tooLarge) {
       await releaseReservation();

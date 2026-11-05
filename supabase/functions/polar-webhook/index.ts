@@ -28,6 +28,17 @@ function tierOfStatus(status: string): "paid" | "free" | null {
   return null;
 }
 
+// Polar event timestamps are Unix seconds; DB timestamps are ISO strings.
+// Every site that compares the two MUST go through this helper — a raw
+// getTime() is milliseconds, and comparing seconds against milliseconds
+// is false for any real pair (that exact drift made the first-event
+// retry dead code until this helper landed).
+function toEpochSeconds(iso: unknown): number | null {
+  if (typeof iso !== "string" || !iso) return null;
+  const ms = new Date(iso).getTime();
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+
 // Ground truth for same-second event ties (see below): ask Polar for the
 // subscription's current status instead of guessing from arrival order.
 // Returns null when the token is missing or the lookup fails — the caller
@@ -229,9 +240,7 @@ Deno.serve(async (req) => {
       return json({ error: "trip lookup failed" }, 500);
     }
   }
-  const lastTs = trip?.polar_last_event_ts
-    ? new Date(trip.polar_last_event_ts as string).getTime() / 1000
-    : null;
+  const lastTs = toEpochSeconds(trip?.polar_last_event_ts);
   const lastEventId = (trip?.polar_last_event_id as string | null) ?? null;
   if (lastTs !== null && eventTs < lastTs) {
     console.log(
@@ -346,25 +355,73 @@ Deno.serve(async (req) => {
     // wins, not newest-wins. If we entered with no stored event and
     // lost, re-read: the winner may be an OLDER event that committed
     // first, in which case this newer event should still land. Retry
-    // once under the lt guard (safe against a further race); if the
-    // retry also matches zero rows, a genuinely newer event won and
-    // the ignore stands.
+    // once under a timestamp guard (safe against a further race); if
+    // the retry also matches zero rows, a genuinely newer event won
+    // and the ignore stands.
     const { data: current, error: rereadErr } = await supabase
-      .from("trips").select("polar_last_event_ts").eq("id", tripId).single();
-    const storedTs = current?.polar_last_event_ts
-      ? new Date(current.polar_last_event_ts as string).getTime()
-      : null;
-    if (!rereadErr && storedTs !== null && eventTs > storedTs) {
-      const { data: retried, error: retryErr } = await supabase
-        .from("trips").update(update).eq("id", tripId)
-        .lt("polar_last_event_ts", eventIso).select("id");
-      if (retryErr) {
-        console.error("polar-webhook: first-event retry failed", retryErr.message);
-        return json({ error: "trip update failed" }, 500);
-      }
-      applied = !!retried && retried.length > 0;
-    } else if (rereadErr) {
+      .from("trips").select("polar_last_event_ts, polar_subscription_id, tier").eq("id", tripId).single();
+    if (rereadErr) {
       console.error("polar-webhook: first-event re-read failed", rereadErr.message);
+    } else {
+      const storedTs = toEpochSeconds(current?.polar_last_event_ts);
+      const storedSub = (current?.polar_subscription_id as string | null) ?? null;
+      const storedTier = (current?.tier as string | null) ?? null;
+      // Re-run the stale-subscription guards against the re-read state:
+      // the snapshot guards above saw null and passed, but the winner
+      // may have been a resubscribe this event must not undo (e.g. a
+      // newer cancel for old sub A losing to a paid event for new sub B).
+      const staleFree = tier === "free" && !!storedSub && storedSub !== subscriptionId;
+      const stalePaid = tier === "paid" && storedTier === "paid" && !!storedSub && storedSub !== subscriptionId;
+      if (staleFree || stalePaid) {
+        console.log(
+          `polar-webhook: ignoring stale ${type} for trip ${tripId} on first-event retry (event sub ${subscriptionId || "?"}, current ${storedSub})`
+        );
+      } else if (storedTs !== null && eventTs > storedTs) {
+        // Newer loser: retry under the lt guard. Recompute the
+        // checkout-marker condition against the re-read state, not the
+        // pre-race snapshot.
+        const retryUpdate: Record<string, unknown> = { ...update };
+        if (tier !== storedTier || storedSub === subscriptionId) {
+          retryUpdate.polar_checkout_pending_at = null;
+        } else {
+          delete retryUpdate.polar_checkout_pending_at;
+        }
+        const { data: retried, error: retryErr } = await supabase
+          .from("trips").update(retryUpdate).eq("id", tripId)
+          .lt("polar_last_event_ts", eventIso).select("id");
+        if (retryErr) {
+          console.error("polar-webhook: first-event retry failed", retryErr.message);
+          return json({ error: "trip update failed" }, 500);
+        }
+        applied = !!retried && retried.length > 0;
+      } else if (storedTs !== null && eventTs === storedTs && tieBreakAvailable) {
+        // Same-second first-event tie: arrival order is meaningless,
+        // so resolve against Polar ground truth like the non-first
+        // tie-break above. The eq guard only lands if the stored
+        // event is still this same second.
+        const truth = await groundTruthTier(subscriptionId);
+        if (truth !== null) {
+          tier = truth;
+          const retryUpdate: Record<string, unknown> = { ...update, tier };
+          if (tier !== storedTier || storedSub === subscriptionId) {
+            retryUpdate.polar_checkout_pending_at = null;
+          } else {
+            delete retryUpdate.polar_checkout_pending_at;
+          }
+          const { data: retried, error: retryErr } = await supabase
+            .from("trips").update(retryUpdate).eq("id", tripId)
+            .eq("polar_last_event_ts", eventIso).select("id");
+          if (retryErr) {
+            console.error("polar-webhook: first-event tie retry failed", retryErr.message);
+            return json({ error: "trip update failed" }, 500);
+          }
+          applied = !!retried && retried.length > 0;
+        } else {
+          console.error(
+            `polar-webhook: first-event tie-break lookup failed for trip ${tripId}, keeping arrival order`
+          );
+        }
+      }
     }
   }
   if (!applied) {
