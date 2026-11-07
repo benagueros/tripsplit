@@ -349,6 +349,17 @@ Deno.serve(async (req) => {
       // the 408 would be spurious — process the body instead.
       const completeByLength = Number.isFinite(contentLength) && received >= contentLength;
       if (!completeByLength) {
+        if (!Number.isFinite(contentLength)) {
+          // Chunked upload with no declared length: completeness is
+          // unevaluable, so this 408 may be spurious (all bytes may
+          // already be here with only the EOF signal late). Log loudly
+          // so a real occurrence is visible server-side; the
+          // first-party client always sends content-length, so this
+          // should not happen in practice.
+          console.error(
+            `ocr-scan: 408 on unevaluable upload (no content-length, ${received} bytes received) — may be spurious`
+          );
+        }
         await releaseReservation();
         return json({ error: "Upload timed out — please try again with a smaller photo." }, 408);
       }
