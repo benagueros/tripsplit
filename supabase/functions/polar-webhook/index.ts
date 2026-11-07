@@ -366,10 +366,35 @@ Deno.serve(async (req) => {
       const storedTs = toEpochSeconds(current?.polar_last_event_ts);
       const storedSub = (current?.polar_subscription_id as string | null) ?? null;
       const storedTier = (current?.tier as string | null) ?? null;
-      // Re-run the stale-subscription guards against the re-read state:
-      // the snapshot guards above saw null and passed, but the winner
-      // may have been a resubscribe this event must not undo (e.g. a
-      // newer cancel for old sub A losing to a paid event for new sub B).
+      const isTie = storedTs !== null && eventTs === storedTs;
+      // Same-second tie: arrival order is meaningless, so ask Polar
+      // FIRST and let the stale guards judge the truth-corrected tier.
+      // Guards-first would discard the live subscription's event here:
+      // in a same-second resubscribe race the loser's event can name a
+      // live sub whose event-tier says "free" while Polar says "paid".
+      // (Mirrors the main-path tie-break above, which also consults
+      // ground truth before the guards.) A failed lookup keeps arrival
+      // order — the ignore below stands.
+      let tieResolved = false;
+      if (isTie && tieBreakAvailable) {
+        const truth = await groundTruthTier(subscriptionId);
+        if (truth !== null) {
+          console.log(
+            `polar-webhook: first-event tie resolved for trip ${tripId}: ${truth} (event said ${tier})`
+          );
+          tier = truth;
+          tieResolved = true;
+        } else {
+          console.error(
+            `polar-webhook: first-event tie-break lookup failed for trip ${tripId}, keeping arrival order`
+          );
+        }
+      }
+      // Re-run the stale-subscription guards against the re-read state
+      // (and, for ties, the truth-corrected tier): the snapshot guards
+      // above saw null and passed, but the winner may have been a
+      // resubscribe this event must not undo (e.g. a newer cancel for
+      // old sub A losing to a paid event for new sub B).
       const staleFree = tier === "free" && !!storedSub && storedSub !== subscriptionId;
       const stalePaid = tier === "paid" && storedTier === "paid" && !!storedSub && storedSub !== subscriptionId;
       if (staleFree || stalePaid) {
@@ -394,33 +419,23 @@ Deno.serve(async (req) => {
           return json({ error: "trip update failed" }, 500);
         }
         applied = !!retried && retried.length > 0;
-      } else if (storedTs !== null && eventTs === storedTs && tieBreakAvailable) {
-        // Same-second first-event tie: arrival order is meaningless,
-        // so resolve against Polar ground truth like the non-first
-        // tie-break above. The eq guard only lands if the stored
-        // event is still this same second.
-        const truth = await groundTruthTier(subscriptionId);
-        if (truth !== null) {
-          tier = truth;
-          const retryUpdate: Record<string, unknown> = { ...update, tier };
-          if (tier !== storedTier || storedSub === subscriptionId) {
-            retryUpdate.polar_checkout_pending_at = null;
-          } else {
-            delete retryUpdate.polar_checkout_pending_at;
-          }
-          const { data: retried, error: retryErr } = await supabase
-            .from("trips").update(retryUpdate).eq("id", tripId)
-            .eq("polar_last_event_ts", eventIso).select("id");
-          if (retryErr) {
-            console.error("polar-webhook: first-event tie retry failed", retryErr.message);
-            return json({ error: "trip update failed" }, 500);
-          }
-          applied = !!retried && retried.length > 0;
+      } else if (isTie && tieBreakAvailable && tieResolved) {
+        // The eq guard only lands if the stored event is still this
+        // same second.
+        const retryUpdate: Record<string, unknown> = { ...update, tier };
+        if (tier !== storedTier || storedSub === subscriptionId) {
+          retryUpdate.polar_checkout_pending_at = null;
         } else {
-          console.error(
-            `polar-webhook: first-event tie-break lookup failed for trip ${tripId}, keeping arrival order`
-          );
+          delete retryUpdate.polar_checkout_pending_at;
         }
+        const { data: retried, error: retryErr } = await supabase
+          .from("trips").update(retryUpdate).eq("id", tripId)
+          .eq("polar_last_event_ts", eventIso).select("id");
+        if (retryErr) {
+          console.error("polar-webhook: first-event tie retry failed", retryErr.message);
+          return json({ error: "trip update failed" }, 500);
+        }
+        applied = !!retried && retried.length > 0;
       }
     }
   }

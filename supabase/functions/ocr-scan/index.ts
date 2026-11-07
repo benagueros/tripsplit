@@ -300,11 +300,19 @@ Deno.serve(async (req) => {
     // orphans the row (no release runs). 30s is far above a real
     // receipt upload. A client abort still propagates to the outer
     // catch, which releases the reservation as before.
+    // Two-phase deadline so a complete upload is never 408d spuriously:
+    // at 30s the deadline is only flagged — a pending EOF read may still
+    // resolve, and data still arriving is cut off as genuinely
+    // incomplete — and the reader is only cancelled 2s later. A timeout
+    // is a 408 only when bytes are actually missing (see the
+    // content-length check below).
+    let deadlineHit = false;
     let readTimedOut = false;
-    const readTimer = setTimeout(() => {
+    const deadlineTimer = setTimeout(() => { deadlineHit = true; }, 30_000);
+    const cancelTimer = setTimeout(() => {
       readTimedOut = true;
       reader.cancel().catch(() => {});
-    }, 30_000);
+    }, 32_000);
     try {
       while (true) {
         let result: ReadableStreamReadResult<Uint8Array>;
@@ -316,6 +324,13 @@ Deno.serve(async (req) => {
         }
         const { done, value } = result;
         if (done) break;
+        if (deadlineHit) {
+          // Still streaming past the deadline: bytes are genuinely
+          // missing, so cut it off rather than holding the slot.
+          readTimedOut = true;
+          await reader.cancel();
+          break;
+        }
         received += value.length;
         if (received > 10 * 1024 * 1024) {
           tooLarge = true;
@@ -325,11 +340,18 @@ Deno.serve(async (req) => {
         chunks.push(value);
       }
     } finally {
-      clearTimeout(readTimer);
+      clearTimeout(deadlineTimer);
+      clearTimeout(cancelTimer);
     }
     if (readTimedOut) {
-      await releaseReservation();
-      return json({ error: "Upload timed out — please try again with a smaller photo." }, 408);
+      // Timed out waiting for EOF, not for bytes: if the declared
+      // content-length is fully received, the upload was complete and
+      // the 408 would be spurious — process the body instead.
+      const completeByLength = Number.isFinite(contentLength) && received >= contentLength;
+      if (!completeByLength) {
+        await releaseReservation();
+        return json({ error: "Upload timed out — please try again with a smaller photo." }, 408);
+      }
     }
     if (tooLarge) {
       await releaseReservation();
