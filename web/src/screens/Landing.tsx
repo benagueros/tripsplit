@@ -36,10 +36,12 @@ export default function Landing({
   error,
   onStart,
   onJoin,
+  onRetry,
 }: {
   error: string | null;
   onStart: () => void;
   onJoin: () => void;
+  onRetry?: () => void;
 }) {
   return (
     <div className="landing">
@@ -56,6 +58,11 @@ export default function Landing({
       {error && (
         <div className="screen" style={{ paddingBottom: 0 }}>
           <div className="err">{error}</div>
+          {onRetry && (
+            <button className="btn secondary" onClick={onRetry} style={{ marginTop: 8 }}>
+              Try again
+            </button>
+          )}
         </div>
       )}
 

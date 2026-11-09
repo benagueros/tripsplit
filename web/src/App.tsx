@@ -47,8 +47,18 @@ export default function App() {
           const s = await joinTrip(saved);
           setSession({ trip: s.trip, members: s.members });
           return;
-        } catch {
-          forgetTrip(); // stale token — fall through to landing
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "";
+          // Only a genuinely invalid token is forgotten: a 404 ("Trip
+          // not found") means the trip is gone. Anything else —
+          // network failure, 429, 5xx — is transient, so keep the
+          // saved session and let the user retry instead of forcing
+          // them to find the original link again.
+          if (/trip not found/i.test(msg) || /\(404\)/.test(msg) || /\(400\)/.test(msg)) {
+            forgetTrip(); // stale token — fall through to landing
+          } else {
+            setError("Couldn't reach TripSplit — your trip is still saved. Check your connection and try again.");
+          }
         }
       }
     } catch (e) {
@@ -106,7 +116,7 @@ export default function App() {
   }
 
   if (landing === "choose") {
-    return <Landing error={error} onStart={() => setLanding("create")} onJoin={() => setLanding("join")} />;
+    return <Landing error={error} onStart={() => setLanding("create")} onJoin={() => setLanding("join")} onRetry={boot} />;
   }
 
   return (

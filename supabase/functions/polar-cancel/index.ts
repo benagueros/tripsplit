@@ -127,16 +127,26 @@ Deno.serve(async (req) => {
     current_period_end?: string | null;
   } | null = null;
   if (action === "cancel" || action === "resume") {
-    const res = await fetch(subUrl, {
-      method: "PATCH",
-      headers,
-      body: JSON.stringify({ cancel_at_period_end: action === "cancel" }),
-    });
-    if (!res.ok) {
-      console.error("polar-cancel: polar update failed", res.status, await res.text());
+    let patchRes: Response;
+    try {
+      // 30s, matching polar-checkout: a hung Polar API must not leave
+      // cancel/resume hanging until the platform kills the function.
+      // A timeout is a 504 — the change may or may not have landed,
+      // but the retry is idempotent (same cancel_at_period_end value).
+      patchRes = await fetch(subUrl, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ cancel_at_period_end: action === "cancel" }),
+        signal: AbortSignal.timeout(30000),
+      });
+    } catch {
+      return json({ error: "Polar didn't respond in time — try again." }, 504);
+    }
+    if (!patchRes.ok) {
+      console.error("polar-cancel: polar update failed", patchRes.status, await patchRes.text());
       return json({ error: "Couldn't update the subscription." }, 502);
     }
-    patchSub = (await res.json().catch(() => null)) as typeof patchSub;
+    patchSub = (await patchRes.json().catch(() => null)) as typeof patchSub;
     if (!patchSub) {
       // PATCH succeeded but returned no parseable body: the change
       // landed, so synthesize the expected state rather than reporting
@@ -147,20 +157,31 @@ Deno.serve(async (req) => {
     }
   }
 
-  const res = await fetch(subUrl, { headers });
-  if (!res.ok) {
-    if (patchSub) {
-      // current_period_end stays absent when unknown (synthesized
-      // state) so the UI can render it as unknown, not "no period end".
-      const out: Record<string, unknown> = {
-        status: patchSub.status ?? null,
-        cancel_at_period_end: !!patchSub.cancel_at_period_end,
-      };
-      if (patchSub.current_period_end !== undefined) {
-        out.current_period_end = patchSub.current_period_end;
-      }
-      return json(out);
+  // Shared fallback: when the confirmatory read fails, report the PATCH
+  // state instead of failure — the change already landed.
+  const patchFallback = (): Response | null => {
+    if (!patchSub) return null;
+    // current_period_end stays absent when unknown (synthesized
+    // state) so the UI can render it as unknown, not "no period end".
+    const out: Record<string, unknown> = {
+      status: patchSub.status ?? null,
+      cancel_at_period_end: !!patchSub.cancel_at_period_end,
+    };
+    if (patchSub.current_period_end !== undefined) {
+      out.current_period_end = patchSub.current_period_end;
     }
+    return json(out);
+  };
+  let res: Response;
+  try {
+    res = await fetch(subUrl, { headers, signal: AbortSignal.timeout(30000) });
+  } catch {
+    // Timed out (or network failure): same as a failed read below.
+    return patchFallback() ?? json({ error: "Polar didn't respond in time — try again." }, 504);
+  }
+  if (!res.ok) {
+    const fallback = patchFallback();
+    if (fallback) return fallback;
     console.error("polar-cancel: polar read failed", res.status, await res.text());
     return json({ error: "Couldn't read the subscription." }, 502);
   }
