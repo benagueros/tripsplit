@@ -9,6 +9,8 @@
 -- join would otherwise silently drop them), and the payer must be a
 -- member of the trip. The member-validation trigger still fires on the
 -- writes themselves; this only adds the checks the trigger cannot see.
+-- Amended Nov 9, 2026 (DIFF review, LOW): validate_receipt_items also
+-- rejects total claimed qty above the item's qty.
 -- Bodies below are otherwise unchanged from 20261102_save_rpcs.sql.
 
 -- ---------- shared validators ----------
@@ -93,7 +95,19 @@ begin
       )
       or c.qty is null or c.qty < 1 or c.qty > 10000
   ) then
-    raise exception 'Receipt claims must name a real item and a qty of 1–10000.';
+  -- Total claimed qty per item must not exceed the item's qty: over-claiming
+  -- a line misattributes money (settle.ts splits proportionally, so no money
+  -- is created — but the split would be wrong).
+  if exists (
+    select 1
+    from jsonb_to_recordset(p_items) as x(name text, qty integer, price_cents integer, sort integer)
+    where (
+      select coalesce(sum(c.qty), 0)
+      from jsonb_to_recordset(p_claims) as c(item_sort integer, member_id uuid, qty integer)
+      where c.item_sort = x.sort
+    ) > x.qty
+  ) then
+    raise exception 'Claims cannot exceed an item''s quantity.';
   end if;
 end;
 $$;

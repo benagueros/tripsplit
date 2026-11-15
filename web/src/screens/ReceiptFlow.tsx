@@ -303,8 +303,11 @@ export default function ReceiptFlow({
       setError("Enter the receipt total.");
       return;
     }
-    if (totalCents < itemsSubtotal) {
-      setError(`Total (${formatMoney(totalCents)}) can't be less than the items (${formatMoney(itemsSubtotal)}).`);
+    // A total below the items subtotal is an unitemized bottom-line
+    // discount — settle.ts spreads it by claimed weight, so it reconciles.
+    // Only a negative total is nonsense.
+    if (totalCents < 0) {
+      setError("Enter a receipt total of $0 or more.");
       return;
     }
     // Note: claim quantities are proportional shares (settle.ts splits by

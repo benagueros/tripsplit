@@ -245,10 +245,18 @@ export async function getReceiptForEdit(expenseId: string): Promise<{
   const itemIds = (items ?? []).map((it: { id: string }) => it.id);
   const claims = new Map<string, { member_id: string; qty: number }[]>();
   if (itemIds.length > 0) {
-    const { data: claimRows, error: claimErr } = await db.from("item_claims")
-      .select("receipt_item_id, member_id, qty").in("receipt_item_id", itemIds);
-    if (claimErr) throw claimErr;
-    for (const r of claimRows ?? []) {
+    // Chunk the .in() list like reload(): 200+ item ids in one query
+    // string can exceed gateway URL limits (~8KB) and fail the edit.
+    const claimRows: { receipt_item_id: string; member_id: string; qty: number }[] = [];
+    for (let i = 0; i < itemIds.length; i += ITEM_SCOPE_CHUNK) {
+      const chunk = itemIds.slice(i, i + ITEM_SCOPE_CHUNK);
+      claimRows.push(
+        ...(await fetchAll<{ receipt_item_id: string; member_id: string; qty: number }>(() =>
+          db.from("item_claims").select("receipt_item_id, member_id, qty").in("receipt_item_id", chunk),
+        )),
+      );
+    }
+    for (const r of claimRows) {
       const list = claims.get(r.receipt_item_id) ?? [];
       list.push({ member_id: r.member_id, qty: r.qty });
       claims.set(r.receipt_item_id, list);

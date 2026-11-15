@@ -177,12 +177,13 @@ Deno.serve(async (req) => {
     res = await fetch(subUrl, { headers, signal: AbortSignal.timeout(30000) });
   } catch {
     // Timed out (or network failure): same as a failed read below.
+    console.error("polar-cancel: polar read failed (timeout/network)");
     return patchFallback() ?? json({ error: "Polar didn't respond in time — try again." }, 504);
   }
   if (!res.ok) {
+    console.error("polar-cancel: polar read failed", res.status, await res.text());
     const fallback = patchFallback();
     if (fallback) return fallback;
-    console.error("polar-cancel: polar read failed", res.status, await res.text());
     return json({ error: "Couldn't read the subscription." }, 502);
   }
   // Same guard as the PATCH parse: a 200 with a non-JSON body must not

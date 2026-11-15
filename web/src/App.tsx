@@ -21,6 +21,13 @@ export default function App() {
   const [booting, setBooting] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Switching screens drops any stale boot/join error — it belongs to
+  // the screen it happened on, not the one the user just opened.
+  const showLanding = (mode: LandingMode) => {
+    setError(null);
+    setLanding(mode);
+  };
+
   const boot = useCallback(async () => {
     setBooting(true);
     setError(null);
@@ -49,12 +56,13 @@ export default function App() {
           return;
         } catch (e) {
           const msg = e instanceof Error ? e.message : "";
-          // Only a genuinely invalid token is forgotten: a 404 ("Trip
-          // not found") means the trip is gone. Anything else —
-          // network failure, 429, 5xx — is transient, so keep the
-          // saved session and let the user retry instead of forcing
-          // them to find the original link again.
-          if (/trip not found/i.test(msg) || /\(404\)/.test(msg) || /\(400\)/.test(msg)) {
+          // Only a genuinely invalid token is forgotten: trip-auth's
+          // "Trip not found" means the trip is gone. Anything else —
+          // network failure, 429, 5xx, gateway 404/400 — is transient
+          // or ambiguous, so keep the saved session and let the user
+          // retry instead of forcing them to find the original link
+          // again.
+          if (/trip not found/i.test(msg)) {
             forgetTrip(); // stale token — fall through to landing
           } else {
             setError("Couldn't reach TripSplit — your trip is still saved. Check your connection and try again.");
@@ -90,13 +98,13 @@ export default function App() {
   const handleLeave = () => {
     forgetTrip();
     setSession(null);
-    setLanding("choose");
+    showLanding("choose");
   };
 
   const handleStartNewTrip = () => {
     forgetTrip();
     setSession(null);
-    setLanding("create");
+    showLanding("create");
   };
 
   if (booting) {
@@ -116,7 +124,7 @@ export default function App() {
   }
 
   if (landing === "choose") {
-    return <Landing error={error} onStart={() => setLanding("create")} onJoin={() => setLanding("join")} onRetry={boot} />;
+    return <Landing error={error} onStart={() => showLanding("create")} onJoin={() => showLanding("join")} onRetry={boot} />;
   }
 
   return (
@@ -130,12 +138,12 @@ export default function App() {
         {error && <div className="err">{error}</div>}
         {landing === "create" && (
           <CreateTrip
-            onBack={() => setLanding("choose")}
+            onBack={() => showLanding("choose")}
             onCreate={handleCreate}
           />
         )}
         {landing === "join" && (
-          <JoinTrip onBack={() => setLanding("choose")} onJoin={handleJoin} />
+          <JoinTrip onBack={() => showLanding("choose")} onJoin={handleJoin} />
         )}
       </div>
     </div>

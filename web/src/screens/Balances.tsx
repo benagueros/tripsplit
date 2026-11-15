@@ -23,6 +23,7 @@ export default function Balances({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [markingPaid, setMarkingPaid] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // Copy fallback for desktop: venmo:// deep links do nothing without the
@@ -101,13 +102,21 @@ export default function Balances({
     return map;
   }, [data]);
 
+  // Keyed like `confirming`: a fast double-tap on "Mark as paid" must
+  // not record two identical pending payments.
+  const paidKey = (from: string, to: string, amountCents: number) => `${from}:${to}:${amountCents}`;
   const markPaid = async (from: string, to: string, amountCents: number) => {
+    const key = paidKey(from, to, amountCents);
+    if (markingPaid === key) return;
+    setMarkingPaid(key);
     setError(null);
     try {
       await recordPayment({ tripId: data.trip.id, from, to, amountCents });
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't record that.");
+    } finally {
+      setMarkingPaid(null);
     }
   };
 
@@ -237,7 +246,7 @@ export default function Balances({
                 {copiedKey === copyKey ? "Copied!" : "Copy details"}
               </button>
             </div>
-            <button className="btn ghost small" style={{ width: "100%" }} onClick={() => markPaid(s.from_member_id, s.to_member_id, s.amount_cents)}>
+            <button className="btn ghost small" style={{ width: "100%" }} disabled={markingPaid === paidKey(s.from_member_id, s.to_member_id, s.amount_cents)} onClick={() => markPaid(s.from_member_id, s.to_member_id, s.amount_cents)}>
               <Icon name="check" size={16} /> Mark as paid
             </button>
           </div>
