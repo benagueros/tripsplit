@@ -95,6 +95,8 @@ begin
       )
       or c.qty is null or c.qty < 1 or c.qty > 10000
   ) then
+    raise exception 'Receipt claims must name a real item and a qty of 1–10000.';
+  end if;
   -- Total claimed qty per item must not exceed the item's qty: over-claiming
   -- a line misattributes money (settle.ts splits proportionally, so no money
   -- is created — but the split would be wrong).

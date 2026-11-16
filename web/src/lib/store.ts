@@ -252,7 +252,7 @@ export async function getReceiptForEdit(expenseId: string): Promise<{
       const chunk = itemIds.slice(i, i + ITEM_SCOPE_CHUNK);
       claimRows.push(
         ...(await fetchAll<{ receipt_item_id: string; member_id: string; qty: number }>(() =>
-          db.from("item_claims").select("receipt_item_id, member_id, qty").in("receipt_item_id", chunk),
+          db.from("item_claims").select("receipt_item_id, member_id, qty").in("receipt_item_id", chunk).order("receipt_item_id").order("member_id"),
         )),
       );
     }
